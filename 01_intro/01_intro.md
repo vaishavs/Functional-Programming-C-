@@ -150,6 +150,6 @@ namespace stdx = std::execution;
 ```
 The above example uses multithreading for asynchronosity. The std::execution::schedule starts asynchronous work, std::execution::then maps values, and std::execution::let_value chains new senders. Together they form a pipeline for asynchronous programming in C++26, resulting in composability similar to Haskell’s do notation or Scala’s flatMap.
 
-Source: https://www.youtube.com/watch?v=lvlXgSK03D4 Note: 
+Source: https://www.youtube.com/watch?v=lvlXgSK03D4 
 
-The examples should be using the latest GCC compiler with latest std specified.
+Note: The examples should be using the latest GCC compiler with latest std specified.
