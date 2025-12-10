@@ -60,12 +60,12 @@ Some common building blocks in C++ are:
 3. Combining ranges: ```cartesian_product```, ```zip```, ```concat```
 4. Splitting ranges: ```split```, ```chunk_by```
 5. Joining ranges: ```join```, ```join_with```
- 
+
 Some commonly used algorithms are:
- 1. Folds: ```max*```/```min*```, ```cout*```, ```all_of```/```any_of```/```none_of```
- 2. Searches: ```find*```, ```search*```
+1. Folds: ```max*```/```min*```, ```cout*```, ```all_of```/```any_of```/```none_of```
+2. Searches: ```find*```, ```search*```
 3. Sorting: ```*sort```
- 
+
 Using them minimizes the use of the ```for``` loop.
  
 ### Composing functions
@@ -133,7 +133,7 @@ The compositions used in this category are:
 3. ```.and_then``` -> tochain with another optional/failible function
 4. ```.or_else``` -> to chain with an error handling function
 
-Unfortunately, mixing different kinds of optionalness/failure is difficult. But composing using ```.transform```/```.and_then``` minimizes the use of if.
+Unfortunately, mixing different kinds of optionalness/failure is difficult. But composing using ```.transform```/```.and_then``` minimizes the use of ```if```.
  
 ### Composing I/O
 Pure functions are those which always produce the same value for the same input without side-effects. This essentially means no global state, and no functions interacting with the outside world.  However, in C++, functions need not be pure, but it is still a good idea to separate I/O from computation, by composing actions and executing them later. Consider an example where an integer is read as an upper limit, the fibonacci numbers are computed, and the results are written, asynchronously.
