@@ -52,11 +52,11 @@ namespace stdv = std::views;
 ```
 A range refers to a pair of two iterators, the head and the tail of a sequence (or a sentinel in some cases).
 Some common building blocks in C++ are:
- 1. Creating ranges: iota, generator
- 2.  Transforming ranges: transform, filter
- 3. Combining ranges: cartesian_product, zip, concat
- 4. Splitting ranges: split, chunk_by
- 5. joining ranges: join, join_with
+1. Creating ranges: iota, generator
+2.  Transforming ranges: transform, filter
+3. Combining ranges: cartesian_product, zip, concat
+4. Splitting ranges: split, chunk_by
+5. joining ranges: join, join_with
  
 Some commonly used algorithms are:
  1. Folds: max*/min*, cout*, all_of/any_of/none_of
@@ -111,16 +111,16 @@ Now, the composed code looks like: 
 // Input list
  std::string list[] = {  "123",  // Success
                         "abc",  // Failure: the input is not a number
-                        "600"};  // Failure: the double of the input is more than 1000
+                        "600" };  // Failure: the double of the input is more than 1000
  
 for (int i=0; i<3; i++) {
   auto result = stringToInt(list[i])
-        .and_then(multiplyByTwo) // Chained operation if previous one succeeded
-        .or_else([](Error e) {   // Fallback if any previous operation failed
-            std::cerr << "Caught error in or_else: " << e << std::endl;
-             // The callable to or_else must return an std::expected of the same value type
-             return std::unexpected<Error>("Recovery failed");
-         };
+                .and_then(multiplyByTwo) // Chained operation if previous one succeeded
+                .or_else([](Error e) {   // Fallback if any previous operation failed
+                  std::cerr << "Caught error in or_else: " << e << std::endl;
+                   // The callable to or_else must return an std::expected of the same value type
+                   return std::unexpected<Error>("Recovery failed");
+                 };
   handleResult(result);
  }
 ```
