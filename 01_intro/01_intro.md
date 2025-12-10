@@ -48,8 +48,8 @@ namespace stdv = std::views;
 {
    return stdr::max( // 3. Maximum
           rng
-           | stdv::transform([](int x) {return std::abs(x); }) // 1. Compute the magnitudes
-           | stdv::filter([](int x) {return x % 2 == 1; }) // 2. Keep the odd values
+           | stdv::transform([](int x) {  return std::abs(x);  }) // 1. Compute the magnitudes
+           | stdv::filter([](int x) {  return x % 2 == 1;  }) // 2. Keep the odd values
   );
  }
 ```
