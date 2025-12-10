@@ -32,12 +32,14 @@ int biggest_odd_magnitude(auto&& rng)
    return candidate;
  }
 ```
- 
 This code can be divided into 3 subproblems: 
+
 i) Compute the magnitude of each element
-ii) Keep only odd ones 
+
+ii) Keep only the odd ones 
+
 iii) Find the maximum
- 
+
 After composition, the code looks like:
 ``` 
 namespace stdr = std::ranges;
