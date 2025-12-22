@@ -54,7 +54,7 @@ int res = f(10, 5);
 ```
 
 ### Member function pointers
-Function pointers to member functions are used in the following manner:
+Function pointers to member functions are declared in the following manner:
 ```
 ReturnType (ClassName::*ptrName)(Params) = &ClassName::Member;
 ```
