@@ -139,6 +139,7 @@ int main()
     
     int z = add(x, y);
     std::cout << "z = " << z << std::endl;
+
     int zf = aF(x, y); // aF.operator()(x,y)
     std::cout << "zf = " << zf << std::endl;
 }
