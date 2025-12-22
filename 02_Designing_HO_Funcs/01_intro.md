@@ -120,7 +120,7 @@ Functors are smart function pointers in the sense that they have:
 * Distiction between function pointers with identical signature
 * State information
 
-A functor is basically a class that overloads the function call operator (```()```)
+A functor is basically a class that overloads the function call operator (```()```), allowing an instance of a class to be called like a function. A functor's type is known at compile-time, so compilers can often inline the function logic directly into the calling code. This makes functors generally faster than function pointers.
 For example:
 ```
 #include <iostream>
