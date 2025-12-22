@@ -150,3 +150,5 @@ While raw function pointers are efficient, modern C++ (C++11 and later) provides
 * Lambdas: Anonymous functions that can be passed directly to other functions without declaring a named function (internally converted to a functor by the compiler).
 * ```std::invoke```: A universal way to call any callable (added in C++17) that simplifies the syntax for member function pointers.
 * ```std::function_fref```: A type-safe function reference
+
+Source: https://www.youtube.com/watch?v=i7-jWzWOBbk&t=79s
