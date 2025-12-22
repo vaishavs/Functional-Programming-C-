@@ -146,14 +146,14 @@ int main()
 }
 ```
 Functors store internal variables (member data) initialized via a constructor. This allows the object to "remember" data between calls without using global or static variables, hence ensuring state persistence.
-The C++ Standard Library provides various built-in functors for common operations in the <functional> header: 
+The C++ Standard Library provides various built-in functors for common operations in the ```<functional>``` header: 
 * Arithmetic: ```std::plus```, ```std::minus```, ```std::multiplies```, ```std::divides```, ```std::modulus```.
 * Relational: ```std::equal_to```, ```std::not_equal_to```, ```std::greater```, ```std::less```, ```std::greater_equal```, ```std::less_equal```.
 * Logical: ```std::logical_and```, ```std::logical_or```, ```std::logical_not```. 
 
 
 ## Modern C++ Alternatives (2025 Context)
-While raw function pointers are efficient, modern C++ (C++11 and later) provides more flexible alternatives: 
+While raw function objects are efficient, modern C++ (C++11 and later) provides more flexible alternatives: 
 * ```std::function```: A type-safe wrapper that can store function pointers, lambdas, or functors.
 * Lambdas: Anonymous functions that can be passed directly to other functions without declaring a named function (internally converted to a functor by the compiler).
 * ```std::invoke```: A universal way to call any callable (added in C++17) that simplifies the syntax for member function pointers.
