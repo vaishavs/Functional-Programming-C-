@@ -92,6 +92,7 @@ int main() {
 
 ## Function references
 Just as there is a pointer to a function, an alias (reference) can be created for a function name.
+
 **Syntax**
 ```
 return_type (&referenceName)(param_list)
