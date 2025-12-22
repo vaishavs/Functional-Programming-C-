@@ -1,3 +1,10 @@
+/**
+This file demonstrates:
+    - Returning function pointers
+    - Passing function pointers as arguments
+    - Array of function pointers
+ */
+
 #include <iostream>
 
 // Sample functions to return
