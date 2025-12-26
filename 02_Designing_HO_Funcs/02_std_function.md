@@ -50,3 +50,5 @@ void risky_func() {
 ```
 * Dangling References: When returning a lambda, local variables should not be captured by reference (```[&]```) if those variables will go out of scope after the function returns. They should always be captured by value (```[=]``` or ```[var]```) for returned lambdas.
 * Return Type Deduction: ```auto``` return type requires the function definition to be visible at the call site.
+
+A ```const std::function_ref``` can still invoke a mutable lambda because it does not own the state being mutated.
