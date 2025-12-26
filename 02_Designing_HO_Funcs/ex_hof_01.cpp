@@ -12,6 +12,10 @@ struct Multiplier {
 void invoke(int x, int (*func)(int)) {
     std::cout << func(x) << std::endl;
 }
+void call(int x, int (&func)(int)) {
+    std::cout << func(x) << std::endl;
+}
+
 // Function to pass in
 int square(int n) { return n * n; }
 
@@ -37,6 +41,7 @@ void compute(int a, int b, std::function<int(int, int)> operation) {
 int main() {
     // Passes the address of square
     invoke(5, square);
+    call(3, square);
 
     // Passes a lambda
     compute(10, 5, [](int x, int y) { return x+y; });
