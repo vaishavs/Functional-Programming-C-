@@ -23,7 +23,7 @@ int square(int n) { return n * n; }
 
 // Template with a callback
 template<typename Func>
-void execute(int x, Func callback) { // Accepts any callable entity
+void execute(int x, Func callback) { // Accepts any callable entity with a matching signature
     callback(x);
 }
 
