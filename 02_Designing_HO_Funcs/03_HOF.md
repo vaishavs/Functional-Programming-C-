@@ -44,5 +44,5 @@ auto createMultiplier(int factor) {
 Any callable entities that behave like functions, such as function pointers, lambdas, or ```std::function``` objects can be returned.
 
 Important Warnings
-* Dangling References: When returning a lambda, ensure you do not capture local variables by reference (```[&]```) if those variables will go out of scope after the function returns. Always capture by value (```[=]``` or ```[var]```) for returned lambdas.
+* Dangling References: When returning a lambda, local variables should not be captured by reference (```[&]```) if those variables will go out of scope after the function returns. They should always be captured by value (```[=]``` or ```[var]```) for returned lambdas.
 * Return Type Deduction: ```auto``` return type requires the function definition to be visible at the call site.
