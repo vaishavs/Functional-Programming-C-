@@ -8,14 +8,29 @@ std::sort(nums.begin(), nums.end(), [](int a, int b) {
     return a > b; // Custom descending order logic
 });
 ```
+Any callable entities that behave like functions, such as function pointers, lambdas, or ```std::function``` objects can be passed in.
 
+## Functions returning another function
+Higher order functions can generate new functions on the fly using lambdas or ```std::function``` with ```auto``` return type.
+```
+// HOF that returns a new lambda function
+auto createMultiplier(int factor) {
+    return [factor](int x) {
+        return x * factor;
+    };
+}
+```
+Any callable entities that behave like functions, such as function pointers, lambdas, or ```std::function``` objects can be returned.
+
+## Implementation
 The below table summarizes the different implementations of HOFs.
 | Method | Description | Performance | Limitations |
 | --------------- | --------------- | --------------- | -------
+| Raw Function Pointers | Minimal overhead but cannot easily capture state (no closures). | High | A function needs to be there beforehand, not on the fly
+| Raw Function References | Minimal overhead and non-owning | High | Cannot be re-assigned, can only bind to a standard global/static function or a capture-less lambda, cannot be null, limited lifetime safety, cannot create an array of raw function references (STL DS should be used)
 | Templates | Takes a generic F parameter. Allows the compiler to inline the function. | High (Best) | Type deduction, static polymorphism
 | ```std::function``` | Provides a uniform interface for different callable types. | Medium (Overhead) | Lands in problems in cases of ```std::move``` only objects, const-correctness, and signature deduction at runtime for erased wrappers.
-| Function Pointers | Minimal overhead but cannot easily capture state (no closures). | High | A function needs to be there beforehand, not on the fly
-| ```std::fucntion_ref``` | Type-erasing reference to a callable type | High | Limited lifetime or dangling reference, reference semantics enforced, used only for synchronous algorithms
+| ```std::fucntion_ref``` | Type-erasing reference to a callable type | High | Limited lifetime safety, reference semantics enforced, used only for synchronous algorithms
 
 **Note**
 
@@ -30,18 +45,6 @@ void risky_func() {
 }
 ```
 The ```std::function_ref``` should be used only when it is certain the referenced callable will outlive the function_ref object itself. 
-
-## Functions returning another function
-Higher order functions can generate new functions on the fly using lambdas or ```std::function``` with ```auto``` return type.
-```
-// HOF that returns a new lambda function
-auto createMultiplier(int factor) {
-    return [factor](int x) {
-        return x * factor;
-    };
-}
-```
-Any callable entities that behave like functions, such as function pointers, lambdas, or ```std::function``` objects can be returned.
 
 **Important Warnings**
 * Dangling References: When returning a lambda, local variables should not be captured by reference (```[&]```) if those variables will go out of scope after the function returns. They should always be captured by value (```[=]``` or ```[var]```) for returned lambdas.
