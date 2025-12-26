@@ -2,16 +2,21 @@
 #include <functional>
 #include <iostream>
 
+// Functor class
+struct Multiplier {
+    int factor;
+    int operator()(int val) const { return val * factor; }
+};
+
 // Returns a std::function that takes an int and returns an int
 std::function<int(int)> adder(int factor) {
     return [factor](int x) { return x + factor; }; // Returns a lambda
 }
-/*
-// Alt:
-auto adder(int x) {
-    return [x](int y) { return x + y; };  // Returns a lambda
+
+auto multiply(int x) {
+    return Multiplier{std::move(x)};  // Returns a functor
 }
- */
+
 
 // Sample function to return
 int add(int a, int b) {
@@ -66,6 +71,9 @@ int main() {
 
     auto addOp = getOp();
     std::cout << addOp(10, 15) << std::endl; // Outputs: 25
+
+    auto mul = multiply(5);
+    std::cout << mul(10) << std::endl; // Outputs: 50
 
     // Since C++26
     // auto op = getGlobalOp();
