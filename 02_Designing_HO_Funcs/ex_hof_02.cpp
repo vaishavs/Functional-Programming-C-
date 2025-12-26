@@ -1,3 +1,4 @@
+/* This program demonstrates returning a function. */
 #include <functional>
 #include <iostream>
 
