@@ -35,17 +35,3 @@ The below table summarizes the different implementations of HOFs.
 **Note**
 
 Synchronous algorithms are those functions that run from the begging to end in one go. Asynchronous algorithms are those which can pause, save the context, and resume later.
-
-The ```std::function_ref``` guarantees trivial copyability and avoids memory allocation, making it unsuitable for owning complex, potentially large callable objects or stateful lambdas. It cannot make an internal copy of the function it is assigned to, unlike ```std::function```. If a ```std::function_ref``` is constructed from a temporary object (e.g., a stateless lambda), it results in undefined behavior when it is called because it will be referencing a dangling object. That is, reference semantics are enforced.
-```
-// DANGER: UNDEFINED BEHAVIOR
-void risky_func() {
-    function_ref<void()> fr = []{ std::cout << "Dangling reference!"; }; // fr refers to a temporary
-    fr(); // The temporary lambda is gone by this point
-}
-```
-The ```std::function_ref``` should be used only when it is certain the referenced callable will outlive the function_ref object itself. 
-
-**Important Warnings**
-* Dangling References: When returning a lambda, local variables should not be captured by reference (```[&]```) if those variables will go out of scope after the function returns. They should always be captured by value (```[=]``` or ```[var]```) for returned lambdas.
-* Return Type Deduction: ```auto``` return type requires the function definition to be visible at the call site.
