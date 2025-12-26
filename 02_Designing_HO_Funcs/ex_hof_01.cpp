@@ -1,3 +1,4 @@
+/* This program demonstrates passing a function to another function. */
 #include <iostream>
 #include <functional>
 
