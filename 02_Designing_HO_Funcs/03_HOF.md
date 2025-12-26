@@ -29,8 +29,9 @@ The below table summarizes the different implementations of HOFs.
 | Raw Function Pointers | Minimal overhead but cannot easily capture state (no closures). | High | A function needs to be there beforehand, not on the fly
 | Raw Function References | Minimal overhead and non-owning | High | Cannot be re-assigned, can only bind to a standard global/static function or a capture-less lambda, cannot be null, limited lifetime safety, cannot create an array of raw function references (STL DS should be used)
 | Templates | Takes a generic F parameter. Allows the compiler to inline the function. | High (Best) | Type deduction, static polymorphism
+| Functor | Class wrapper to operator ```()``` | Context-dependent | Potential performance issues (if not inlined), state management and type deduction complexity, slicing issues (when returning as a base class object), lifetime management
 | ```std::function``` | Provides a uniform interface for different callable types. | Medium (Overhead) | Lands in problems in cases of ```std::move``` only objects, const-correctness, and signature deduction at runtime for erased wrappers.
-| ```std::fucntion_ref``` | Type-erasing reference to a callable type | High | Limited lifetime safety, reference semantics enforced, used only for synchronous algorithms
+| ```std::function_ref``` | Type-erasing reference to a callable type | High | Limited lifetime safety, reference semantics enforced, used only for synchronous algorithms
 
 **Note**
 
