@@ -2,6 +2,12 @@
 #include <iostream>
 #include <functional>
 
+// Functor class
+struct Multiplier {
+    int factor;
+    void operator()(int val) const { std::cout << val * factor << std::endl; }
+};
+
 // Pass in a function pointer
 void invoke(int x, int (*func)(int)) {
     std::cout << func(x) << std::endl;
@@ -29,9 +35,16 @@ void compute(int a, int b, std::function<int(int, int)> operation) {
 
 
 int main() {
-    invoke(5, square); // Passes the address of square
-    execute(42, [](int n) { std::cout << n << std::endl; }); // Passes a lambda
-    compute(10, 5, [](int x, int y) { return x+y; }); 
+    // Passes the address of square
+    invoke(5, square);
 
+    // Passes a lambda
+    compute(10, 5, [](int x, int y) { return x+y; });
+
+    // Passes the functor
+    Multiplier triple{3};
+    execute(10, triple);
+
+    // Passes a reference to square; a  lambda can also be used.
     // process(5, square);
 }
