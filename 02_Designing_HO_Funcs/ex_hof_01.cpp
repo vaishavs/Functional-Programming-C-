@@ -12,6 +12,8 @@ struct Multiplier {
 void invoke(int x, int (*func)(int)) {
     std::cout << func(x) << std::endl;
 }
+
+// Pass in a reference to a function
 void call(int x, int (&func)(int)) {
     std::cout << func(x) << std::endl;
 }
