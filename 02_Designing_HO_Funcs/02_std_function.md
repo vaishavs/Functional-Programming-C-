@@ -34,7 +34,7 @@ int main() {
 It is crucial to note that ```std::function``` can introduce noticeable performance penalties. To be able to hide the contained type and provide a common interface over all callable types, it uses a technique known as type erasure. Type erasure is usually based on virtual member function calls. Because virtual calls are resolved at runtime, the compiler cannot inline the call, and thus has limited optimization opportunities.
 
 # std::function_ref
-Starting from C++26, ```std::function_ref``` is a non-owning reference to a callable object. It acts as a type-erased "view" into a function, lambda, or functor. It does not store a copy of the callable; it only stores a reference to it. It is typically the size of two pointers, making it highly efficient to pass by value.
+Starting from C++26, ```std::function_ref``` is a non-owning reference to a callable object. It acts as a type-erased "view" into a function, lambda, or functor. It does not store a copy of the callable; it only stores a reference to it. It is typically the size of two pointers, making it highly efficient to pass by value. It is similar to a raw function pointer but more flexible.
 
 Unlike ```std::function```, it cannot allocate dynamic memory and store a copy of the function assigned to it. Because it is non-owning, the referred callable must outlive the reference.
 
@@ -52,3 +52,32 @@ void risky_func() {
 * Return Type Deduction: ```auto``` return type requires the function definition to be visible at the call site.
 
 A ```const std::function_ref``` can still invoke a mutable lambda because it does not own the state being mutated.
+
+For example,
+```
+#include <iostream>
+#include <functional> // Required for std::function_ref (C++26)
+
+// A function that takes a non-owning reference to a callable with the signature void(int)
+void call_function_ref(std::function_ref<void(int)> f) {
+    std::cout << "Calling the passed function_ref with argument 42" << std::endl;
+    f(42); // Invoke the referenced callable
+}
+
+int main() {
+    // Pass a lambda function (must ensure lambda lifetime covers the call)
+    // The lambda captures 'x' by reference. The lifetime of the lambda expression 
+    // is extended until the end of the `call_function_ref` function call.
+    int x = 10;
+    auto lambda = [&](int value) { 
+        x += value;
+        std::cout << "Lambda called, x is now: " << x << std::endl;
+    };
+    call_function_ref(lambda); 
+    std::cout << "After call, x is: " << x << std::endl;
+
+    // Function pointers, free functions, raw function references, and functors can also be passed to a std::function_ref.
+
+    return 0;
+}
+```
