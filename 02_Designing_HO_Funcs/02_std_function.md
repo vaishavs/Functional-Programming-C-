@@ -48,7 +48,7 @@ The syntax for ```std::function_ref``` follows the standard function signature t
 std::function_ref<void(int)> func;
 // const or noexcept qualifiers can be used inside template arguments
 ```
-Function pointers, free functions, raw function references, lambdas, and functors can be passed to a ```std::function_ref```. The ```std::function_ref``` can be used in a manner similar to ```std::function```.
+Function pointers, free functions, raw function references, lambdas, and functors can be passed to a ```std::function_ref```. The ```std::function_ref``` can be used in a manner similar to ```std::function```. But unlike ```std::function```, a ```std::function_ref``` cannot be empty. It must be initialized with a valid callable upon creation.
 
 For example,
 ```
