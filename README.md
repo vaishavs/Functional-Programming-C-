@@ -1,5 +1,5 @@
 # Functional Programming in C++
-This repo contains explanation and examples about functional programming in C++.
+This repo contains explanation and examples about functional programming in C++. The explanations are listed in .md files, and exercises are included in .cpp files to try out in the latest compiler. Sources that have been referred to, if any, are listed at the end of .md files.
 
 ## Prerequisites:
 1. Basics in C++ (See https://www.udemy.com/course/cpp23-fundamentals-projects-algorithms/)
@@ -14,3 +14,5 @@ This repo contains explanation and examples about functional programming in C++.
 4. Introduction to Boost.Range Library
 5. Functional Programming Techniques in C++
 6. Advanced Functional Programming Techniques
+
+Happy learning!
