@@ -77,6 +77,7 @@ int main() {
     std::cout << "After call, x is: " << x << std::endl;
 
     // Function pointers, free functions, raw function references, and functors can also be passed to a std::function_ref.
+    // It can be used in a manner similar to std::function.
 
     return 0;
 }
