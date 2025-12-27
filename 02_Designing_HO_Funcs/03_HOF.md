@@ -36,3 +36,5 @@ The below table summarizes the different implementations of HOFs.
 **Note**
 
 Synchronous algorithms are those functions that run from the begging to end in one go. Asynchronous algorithms are those which can pause, save the context, and resume later.
+
+Reference: https://www.youtube.com/watch?v=EbnRt-omrFY&pp=ygUaaGlnaGVyIG9yZGVyIGZ1bmN0aW9ucyBjKys%3D
