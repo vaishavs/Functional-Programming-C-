@@ -10,7 +10,7 @@ There are different types of callable entities in C++:
 Out of these, function pointers, function references, and functors are object types, i.e., they can be used like regular variables, pointers, and references. This allows the user to call functions dynamically at runtime, pass them as arguments to other functions (callbacks), or store them in arrays for complex logic.
 
 ## Function pointers
-A function pointer is a variable that stores the memory address of a function. The signature of a function pointer must match the return type, calling convention, and parameter list of the function it points to.
+Every function occupies a location in the compiled program, so it has an address. A function pointer is a pointer whose pointed-to type is a function type. It is a variable that stores the memory address of a function. The signature of a function pointer must match the return type, calling convention, and parameter list of the function it points to.
 
 ### Global/Namespace function pointer
 A global or namespace function pointer is declared as:
@@ -25,6 +25,8 @@ Finally, the function is invoked via its pointer:
 ```cpp
 auto result = funcPtr(/* ... */);
 ```
+
+In almost every context, the name of a function is implicitly converted to a pointer to that function. This is called function-to-pointer decay. It is why the address-of operator `&` is usually optional when taking a function's address, and why a function name can be assigned directly to a function pointer.
 
 For example, consider a function
 ```cpp
@@ -54,7 +56,7 @@ int res = f(10, 5);
 ```
 
 ### Member function pointers
-Function pointers to member functions are declared in the following manner:
+For non-static member functions, the address is not an ordinary function pointer — it is a pointer to member, which requires the `&Class::member` form and cannot be stored in a variable. Unlike a free function, whose name decays to a pointer, a member function name does not decay. The address must be taken explicitly with `&`, and the name must be qualified with the class:
 ```cpp
 ReturnType (ClassName::*ptrName)(Params) = &ClassName::Member;
 ```
@@ -63,6 +65,7 @@ For example:
 ```cpp
 class Calculator {
 public:
+    int base;
     int add(int a, int b) { return a + b; }
     // ...
 };
@@ -79,8 +82,59 @@ int main() {
     // Call using an object instance
     int res = (calc.*ptr)(5, 5); 
     return 0;
+
+    // Using the .* and ->* operators
+    Calc c{/*base=*/100};
+    Calc* pc = &c;
+    
+    (c.*pAdd)(5);     // 105 — object .*  member-pointer, then call
+    (pc->*pAdd)(7);   // 107 — pointer ->* member-pointer, then call
 }
 ```
+The parentheses around `c.*pAdd` are mandatory. The call operator `()` binds more tightly than `.*` and `->*`, so without the paranthesis, the statement would not make sense. The cv- and ref-qualifiers of a member function are part of the pointer type, so a pointer to a `const` member has a different type from a pointer to a non-const member:
+```
+struct Calc {
+    int base;
+    int addc(int x) const { return base + x; }
+};
+
+int (Calc::*pAddc)(int) const = &Calc::addc;   // note the trailing const
+(c.*pAddc)(3);   // 103
+```
+A `int (Calc::*)(int)` and a `int (Calc::*)(int) const` **cannot** be assigned to one another.
+
+A pointer to member function that refers to a virtual member still dispatches at run time to the correct override for the object it is called on. The pointer names the virtual member; the object determines which override runs:
+```
+struct Calc  { int base; virtual int scale(int x) const { return base * x; }
+               virtual ~Calc() = default; };
+struct Calc2 : Calc { int scale(int x) const override { return base * x * 10; } };
+
+int (Calc::*pScale)(int) const = &Calc::scale;
+
+Calc2 d{/*base=*/2};
+Calc&  ref = d;
+(ref.*pScale)(5);   // 100 — Calc2::scale runs (2 * 5 * 10), not Calc::scale
+```
+This is an important guarantee: a pointer to member is polymorphic-aware. Storing `&Calc::scale` and calling it on a `Calc2` invokes `Calc2::scale`, exactly as a direct virtual call would. Virtual functions therefore add no special case here; they work through the same pointer-to-member machinery.
+
+Because the `.*`/`->*` syntax is awkward and precedence-prone, generic code — and much ordinary code — calls a pointer to member through `std::invoke`, which accepts the member pointer followed by the object and the arguments. The `std::invoke` handles all the variants uniformly.
+```
+std::invoke(pAdd, c, 9);                 // 109  == (c.*pAdd)(9)
+std::invoke(&Calc::add, Calc{50}, 1);    // 51   — object may be a temporary
+```
+
+A pointer to member function is typically larger than a data pointer, because on common ABIs, it must encode enough information to handle virtual members and multiple inheritance. The exact size is implementation-defined. Two further consequences matter in practice:
+* a pointer to member cannot be converted to `void*` or to any ordinary pointer type, and it should not be assumed to fit in a machine word.
+* a pointer to a member of a base class converts implicitly to a pointer to a member of a derived class, because a derived object also has that base member. The direction is base-to-derived, which is the opposite of the base/derived direction for ordinary object pointers, and reflects that every derived object contains the base's members.
+
+Since `noexcept` is part of a function's type, the address of a `noexcept` function has a noexcept-qualified pointer type. The conversion rule between the two is directional:
+```
+void hello() noexcept { /* ... */ }
+static_assert(std::is_same_v<decltype(&hello), void(*)() noexcept>);  // holds
+
+void (*plain)() = hello;   // OK: noexcept pointer → plain pointer (widening the promise)
+```
+The allowed direction is `noexcept`-pointer to plain-pointer: assigning a stronger promise where a weaker one is expected is always safe. The reverse — storing a possibly-throwing function where a `noexcept` one is required — is ill-formed, because it would silently break the guarantee. Keeping this direction straight avoids a class of subtle template errors.
 
 ### Operations allowed
 1. Assign an address of a function
@@ -89,6 +143,37 @@ int main() {
 4. Pass the function pointer as an argument to another function
 5. Return a function pointer
 6. Store them in arrays
+
+Now consider a class that provides only a conversion to a function pointer:
+```
+struct Handler {
+    using Fp = int(*)(int);
+    operator Fp() const { return [](int x){ return x + 1; }; }   // conversion to fn pointer
+    // note: there is no operator() here
+};
+
+Handler h;
+h(41);   // 42
+```
+The call `h(41)` type-checks even though `Handler` has no call operator. The compiler sees the conversion to `int(*)(int)`, synthesizes a surrogate call function of the form "take a `Handler` and an `int`, convert the Handler to `int(*)(int)`, and call it with the `int`", and uses that to evaluate `h(41)`. Effectively, the call becomes `(h.operator Fp())(41)`.
+
+This is a somewhat exotic capability to build deliberately, but it exists so that the language can define, uniformly, what it means to call any object — including those whose "callability" is expressed as a convertibility to a function.
+
+A class may offer several conversions to different function-pointer types. The compiler then synthesizes one surrogate call function per conversion, and ordinary overload resolution selects among them based on the call arguments — the same resolution process that chooses among overloaded functions:
+```
+using FpI = long(*)(int);
+using FpD = long(*)(double);
+
+struct Multi {
+    operator FpI() const { return [](int)    -> long { return 1; }; }
+    operator FpD() const { return [](double) -> long { return 2; }; }
+};
+
+Multi m;
+m(10);    // 1 — an int argument makes the FpI surrogate the best match
+m(3.5);   // 2 — a double argument selects the FpD surrogate
+```
+Each surrogate participates as a candidate; the one whose parameter best matches the argument wins. If both an `operator()` and one or more conversions are present, all of them compete together, and an unbreakable tie is an ambiguity error — the usual overload-resolution outcome.
 
 ## Function references
 Just as there is a pointer to a function, an alias (reference) can be created for a function name. The function name binds directly to the reference rather than decaying to a pointer.
@@ -129,6 +214,12 @@ template <typename T> void byVal(T  f);   // T = int(*)(int,int), f is a functio
 byRef(add);   // f is a reference to add
 byVal(add);   // f is a pointer to add
 ```
+The most common place a reference to a function shows up — often without the author intending it — is template argument deduction. When a function name is passed to a forwarding parameter `F&&`, the deduced type is a reference to function, not a function pointer:
+```
+template<class F>
+void probe(F&&);      // when called as probe(add), F deduces to int(&)(int, int)
+```
+For `probe(add)`, `F` is a reference type whose referent is a function type. This is why generic code that forwards callables must be written to accept function references gracefully; facilities such as `std::invoke` and `std::function` are specified to handle a referent function correctly. A related rule, reference collapsing, governs what happens when references stack during deduction: `T(& &)`, `T(& &&)`, and `T(&& &)` all collapse to the lvalue reference `T(&)`, and only `T(&& &&)` yields an rvalue reference. 
 
 ## Functors
 A functor is basically a class that overloads the function call operator (`()`), allowing an instance of a class to be called like a function. A functor's type is known at compile-time, so compilers can often inline the function logic directly into the calling code. This makes functors generally faster than function pointers.
