@@ -203,61 +203,10 @@ int main() {
 
 The intent is that new code preferring a copyable wrapper reach for `std::copyable_function`, leaving `std::function` in place for compatibility. Until C++26 is available, `std::function` remains the copyable option.
 
-## `std::packaged_task`
+Sources:
 
-The `std::packaged_task` wraps a callable so that invoking it delivers the result (or exception) through a `std::future`. It is the bridge between the callable world and asynchronous results.
-
-```cpp
-std::packaged_task<int(int)> task(triple);   // wrap a callable
-std::future<int> fut = task.get_future();    // obtain the future before running
-task(14);                                     // run: computes 42, stored in the shared state
-fut.get();                                    // 42 — retrieved (would block until ready)
-```
-
-The task can be moved to another thread and run there, with the originating code retrieving the result via the future. `std::packaged_task` is move-only (it owns a shared state) and, like the others, is a function object at heart. It is used to build thread pools and task schedulers, where work is enqueued as tasks and results collected through futures.
-
-The lifecycle of a `std::packaged_task` involves four distinct phases:
-
-* **Initialization:** The template is instantiated with a specific function signature and bound to a callable object.
-* **Future Extraction:** Invoking the `.get_future()` method yields a `std::future` linked directly to the task's shared state.
-* **Execution:** The task must be manually invoked via `operator()`. Execution typically occurs on a separate thread or within a custom thread pool.
-* **Retrieval:** The associated `std::future` retrieves the computed result via `.get()`, blocking the current thread until the execution concludes.
-
-Here is a complete example:
-```cpp
-#include <iostream>
-#include <future>
-#include <thread>
-
-// A simple function designated for asynchronous execution
-int compute_square(int x) {
-    return x * x;
-}
-
-int main() {
-    // Wrap the function in a packaged_task
-    std::packaged_task<int(int)> task(compute_square);
-
-    // Extract the future to retrieve the result later
-    std::future<int> result_future = task.get_future();
-
-    // Move the task to a separate thread for execution
-    std::thread task_thread(std::move(task), 10);
-
-    // ... concurrent operations can occur here ...
-
-    // Retrieve the result (blocks until the calculation finishes)
-    int result = result_future.get();
-    std::cout << "Computed result: " << result << "\n";
-
-    // Synchronize the thread
-    task_thread.join();
-
-    return 0;
-}
-
-```
-
-> **Note on move semantics:** `std::packaged_task` cannot be copied. Moving the object via `std::move()` is mandatory when transferring the task to a new thread.
-
-
+* https://en.cppreference.com/cpp
+* https://medium.com/@sgn00/diving-into-std-function-d342e4b58ea7
+* https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2022/p0792r10.html
+* https://towardsdev.com/std-move-only-function-cpp23-callable-wrapper-no-copy-369e79e5baa0
+* https://www.sandordargo.com/blog/2026/05/20/cpp26-copyable-function
