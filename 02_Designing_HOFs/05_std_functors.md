@@ -24,7 +24,7 @@ The operator function objects are used in three recurring ways, illustrated thro
 Six objects wrap the arithmetic operators. Each is called with the operands and returns the result of the corresponding operator.
 
 | Function object | Operation |
-|||
+|---|---|
 | `std::plus` | `a + b` |
 | `std::minus` | `a - b` |
 | `std::multiplies` | `a * b` |
@@ -67,7 +67,7 @@ Two cautions carry over directly from the operators these objects wrap: `std::di
 Six objects wrap the relational and equality operators, returning `bool`:
 
 | Function object | Operation |
-|||
+|---|---|
 | `std::equal_to` | `a == b` |
 | `std::not_equal_to` | `a != b` |
 | `std::less` | `a < b` |
@@ -99,7 +99,7 @@ std::set<int, std::greater<int>> desc{1, 2, 3};    // iterates 3, 2, 1
 Three objects wrap the logical operators, returning `bool`:
 
 | Function object | Operation |
-|||
+|---|---|
 | `std::logical_and` | `a && b` |
 | `std::logical_or` | `a \|\| b` |
 | `std::logical_not` | `!a` (unary) |
@@ -119,7 +119,7 @@ One semantic difference from the raw operators is worth noting for correctness-s
 Four objects wrap the bitwise operators. These were added in C++14.
 
 | Function object | Operation |
-|||
+|---|---|
 | `std::bit_and` | `a & b` |
 | `std::bit_or` | `a \| b` |
 | `std::bit_xor` | `a ^ b` |
