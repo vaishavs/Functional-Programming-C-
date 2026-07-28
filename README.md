@@ -22,15 +22,17 @@ For more sources, refer [this page](https://www.google.com/url?sa=t&rct=j&q=&esr
    
    i) Callable entities
    
-   ii) ```std::function``` and ```std::function_ref```
+   ii) Type-erased wrappers
    
    iii) Higher-order functions
 
    iv) Binding function parameters
-   
-   v) Examples
 
-   vi) Exercises
+   v) Standard library functors
+   
+   vi) Examples
+
+   vii) Exercises
 4. Standard Higher-Order Functions
 
    i) Introduction
