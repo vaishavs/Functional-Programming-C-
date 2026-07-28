@@ -144,7 +144,8 @@ The allowed direction is `noexcept`-pointer to plain-pointer: assigning a strong
 5. Return a function pointer
 6. Store them in arrays
 
-Now consider a class that provides only a conversion to a function pointer:
+#### Surrogate Call Functions
+Consider a class that provides only a conversion to a function pointer:
 ```
 struct Handler {
     using Fp = int(*)(int);
