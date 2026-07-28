@@ -265,9 +265,3 @@ int* ptr = nullptr;
 // This might compile but causes a crash/UB at runtime
 std::reference_wrapper<int> ref = *ptr; 
 ```
-# Other alternatives
-In 2026, ```std::bind``` is widely considered legacy. Modern C++ provides several high-performance, safer, and more readable alternatives that eliminate its many "dangers."
-* Lambda Expressions (Since C++11)
-* ```std::bind_front``` (C++20) and ```std::bind_back``` (C++23)
-* ```std::move_only_function``` (C++23)
-* Zero-Cost NTTP Callables (C++26)
