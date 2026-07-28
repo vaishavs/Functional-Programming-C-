@@ -136,28 +136,73 @@ mof2(7);                                                   // 107
 // mof2 = mof;   // would not compile: no copy
 ```
 
-`std::move_only_function` also has a cleaner, more expressive signature template than `std::function`: the signature may carry `const`, `&`/`&&`, and `noexcept` qualifiers, which constrain *how* the wrapper may be called and are enforced by the type. For example `std::move_only_function<int(int) const>` permits invocation on a `const` wrapper, and `std::move_only_function<int(int) noexcept>` promises the call will not throw. It deliberately provides **no** `target`/`target_type` inspection, which lets implementations be leaner. When a callable does not need to be copied — the common case for one-shot work items, deferred actions, and task queues — `std::move_only_function` is the more efficient and more precise choice.
+Once moved, the original `std::move_only_function` object enters an empty state. Attempting to invoke an empty wrapper throws a `std::bad_function_call` exception.
+
+The `std::move_only_function` also has a cleaner, more expressive signature template than `std::function`: the signature may carry `const`, `&`/`&&`, and `noexcept` qualifiers, which constrain *how* the wrapper may be called and are enforced by the type. For example, `std::move_only_function<int(int) const>` permits invocation on a `const` wrapper, and `std::move_only_function<int(int) noexcept>` promises the call will not throw. It deliberately provides **no** `target`/`target_type` inspection, which lets implementations be leaner. When a callable does not need to be copied — the common case for one-shot work items, deferred actions, and task queues — `std::move_only_function` is the more efficient and more precise choice.
 
 ## `std::copyable_function`
 
 The `std::copyable_function` is also a C++26 facility, and is supported by GCC16 toolchain.
 
-`std::copyable_function` is to `std::function` what `std::move_only_function` is to a move-only
-wrapper: a copyable type-erased wrapper with the improved, qualifier-aware signature design of
-`std::move_only_function`, specified with cleaner semantics than the original `std::function`
-(for instance, its call operator's `const`-correctness is governed by the signature rather than
-being unconditionally `const`).
+The `std::copyable_function` is a copyable type-erased wrapper with the improved, qualifier-aware signature design of `std::move_only_function`, specified with cleaner semantics than the original `std::function`. It serves the exact same purpose, but it fixes long-standing design flaws regarding const-correctness and qualifiers.
+
+Upon creating a `std::function`, the corresponding `operator()` is marked `const`, meaning invocation is permitted even if the `std::function` object is `const`. However, `std::function` permits storing a *mutable* lambda inside, allowing a `const` wrapper to modify underlying state:
 
 ```cpp
-// Illustrative (C++26):
-std::copyable_function<int(int) const> f = [](int x){ return x + 1; };
-auto g = f;        // copyable, like std::function
-f(41);             // 42
+int x = 0;
+// A mutable lambda modifying 'x'
+std::function<void()> f = [x]() mutable { 
+    x++; 
+}; 
+
+const auto& const_f = f;
+const_f(); // THIS COMPILES! A const object modifying internal state.
+
 ```
 
-The intent is that new code preferring a copyable wrapper reach for `std::copyable_function`,
-leaving `std::function` in place for compatibility. Until C++26 is available,
-`std::function` remains the copyable option.
+Additionally, `std::function` cannot specify whether a callable must be `noexcept`, nor can reference qualifiers (like `&` or `&&`) be specified.
+`std::copyable_function` enforces strict cv-qualifiers (`const`, `volatile`), reference qualifiers (`&`, `&&`), and `noexcept` specifications.
+
+To mandate that a function is safe to call as `const`, explicit declaration as `std::copyable_function<void() const>` is required. Passing a mutable lambda to a `const`-qualified wrapper causes a compiler rejection.
+
+```cpp
+#include <functional>
+#include <iostream>
+
+int main() {
+    int x = 0;
+
+    // 1. A const-qualified copyable_function
+    std::copyable_function<void() const> safe_func = [x]() {
+        std::cout << "Only reading x: " << x << "\n";
+    };
+    safe_func(); // Works!
+
+    // 2. Compilation failure! 
+    // Binding a mutable lambda to a const copyable_function is prohibited.
+    /*
+    std::copyable_function<void() const> bad_func = [x]() mutable {
+        x++;
+    };
+    */
+
+    // 3. To allow mutation, remove 'const' from the signature
+    std::copyable_function<void()> mutable_func = [x]() mutable {
+        x++;
+        std::cout << "Modified x: " << x << "\n";
+    };
+    
+    // As the name implies, copying is supported:
+    auto func_copy = mutable_func; 
+    func_copy();
+    
+    return 0;
+}
+
+```
+
+The intent is that new code preferring a copyable wrapper reach for `std::copyable_function`, leaving `std::function` in place for compatibility. Until C++26 is available, `std::function` remains the copyable option.
+
 ## `std::packaged_task`
 
 The `std::packaged_task` wraps a callable so that invoking it delivers the result (or exception) through a `std::future`. It is the bridge between the callable world and asynchronous results.
@@ -170,3 +215,49 @@ fut.get();                                    // 42 — retrieved (would block u
 ```
 
 The task can be moved to another thread and run there, with the originating code retrieving the result via the future. `std::packaged_task` is move-only (it owns a shared state) and, like the others, is a function object at heart. It is used to build thread pools and task schedulers, where work is enqueued as tasks and results collected through futures.
+
+The lifecycle of a `std::packaged_task` involves four distinct phases:
+
+* **Initialization:** The template is instantiated with a specific function signature and bound to a callable object.
+* **Future Extraction:** Invoking the `.get_future()` method yields a `std::future` linked directly to the task's shared state.
+* **Execution:** The task must be manually invoked via `operator()`. Execution typically occurs on a separate thread or within a custom thread pool.
+* **Retrieval:** The associated `std::future` retrieves the computed result via `.get()`, blocking the current thread until the execution concludes.
+
+Here is a complete example:
+```cpp
+#include <iostream>
+#include <future>
+#include <thread>
+
+// A simple function designated for asynchronous execution
+int compute_square(int x) {
+    return x * x;
+}
+
+int main() {
+    // Wrap the function in a packaged_task
+    std::packaged_task<int(int)> task(compute_square);
+
+    // Extract the future to retrieve the result later
+    std::future<int> result_future = task.get_future();
+
+    // Move the task to a separate thread for execution
+    std::thread task_thread(std::move(task), 10);
+
+    // ... concurrent operations can occur here ...
+
+    // Retrieve the result (blocks until the calculation finishes)
+    int result = result_future.get();
+    std::cout << "Computed result: " << result << "\n";
+
+    // Synchronize the thread
+    task_thread.join();
+
+    return 0;
+}
+
+```
+
+> **Note on move semantics:** `std::packaged_task` cannot be copied. Moving the object via `std::move()` is mandatory when transferring the task to a new thread.
+
+
