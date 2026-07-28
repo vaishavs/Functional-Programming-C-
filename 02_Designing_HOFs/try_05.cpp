@@ -9,10 +9,9 @@
 //   5. lambdas (captureless, capturing, generic)
 //   6. std::function (owning) and function_ref (non-owning)
 //   7. function-like macros — and why they are NOT in the same family
-//   8. pointers to DATA members — callable only through std::invoke (a read)
-//   9. objects with a conversion-to-function-pointer (surrogate call functions)
-//  10. standard adaptors: mem_fn, bind, reference_wrapper, not_fn
-//  11. standard function objects, and querying callability (is_invocable, ...)
+//   8. objects with a conversion-to-function-pointer (surrogate call functions)
+//   9. standard adaptors: bind, reference_wrapper
+//  10. standard function objects, and querying callability (is_invocable, ...)
 //
 // Markers
 //   TODO(n)     — implement from scratch.
@@ -28,13 +27,11 @@
 //
 // The unifying idea
 //   std::invoke(f, args...) calls ALL of entities 1–6 with one syntax,
-//   including the awkward member-pointer case (object goes first). It is also
-//   the ONLY way to "call" entity 8, a pointer to a data member (the call is a
-//   field read, so no argument list can express it). Entity 9 explains how an
-//   object with no operator() can still be called: a conversion to a function
-//   pointer. Entity 7, the macro, is the outlier: it is preprocessor text
-//   substitution, has no type, no address, and cannot be passed to std::invoke
-//   — which is exactly the point step 7 makes.
+//   including the awkward member-pointer case (object goes first). Entity 8
+//   explains how an object with no operator() can still be called: a
+//   conversion to a function pointer. Entity 7, the macro, is the outlier: it
+//   is preprocessor text substitution, has no type, no address, and cannot be
+//   passed to std::invoke — which is exactly the point step 7 makes.
 //
 // Convention used by every test
 //   * Nothing prints. Results are returned/compared with ==.
@@ -63,7 +60,6 @@
 #define STEP8_READY 0
 #define STEP9_READY 0
 #define STEP10_READY 0
-#define STEP11_READY 0
 
 // ---------------------------------------------------------------------------
 // GIVEN: a minimal non-owning function_ref (stands in for std::function_ref).
@@ -422,61 +418,7 @@ inline int squared_ticks() {
 }
 
 // ===========================================================================
-// STEP 8 — pointers to DATA members (the OTHER member pointer)
-// ===========================================================================
-//
-// Step 1 used a pointer to a member FUNCTION. A pointer to a member DATA field,
-// int Rec::*, is a different animal: it names a field, takes NO arguments, and
-// is callable only through std::invoke — where the "call" is a field READ.
-// This is the second std::invoke-only case (the first was the member-function
-// object-goes-first rule). Its everyday use is as a PROJECTION / key extractor:
-// std::invoke(&Rec::id, r) hands an algorithm the field to sort or compare on.
-//
-// TODO(8a)  read_id_pmd(r) -> int
-//   Form a pointer to the data member and read through it with .*:
-//     int Rec::* p = &Rec::id;   return r.*p;
-//   (Same &Class:: rule as member functions; a field name does not decay.)
-//
-// TODO(8b)  read_id_invoke(r) -> int
-//   Same read, through std::invoke — object first, NO extra arguments:
-//     return std::invoke(&Rec::id, r);
-//   There is no argument list to pass; the "call" simply reads the field.
-//
-// TODO(8c)  project(r, p)  [template on Proj]  -> whatever p yields
-//   Return std::invoke(p, r). Because std::invoke unifies every callable, the
-//   SAME body works when p is a data-member pointer (reads a field), a
-//   member-function pointer (calls the method, object-first), or a lambda.
-//   The tests pass all three to prove it.
-//
-// QUESTION(8a): why can a data-member pointer never appear before (args), yet
-//   still be "called" by std::invoke? (What kind of operation is the call?)
-// QUESTION(8b): std::invoke(&Rec::id, r) yields the field as an lvalue. Can the
-//   field be WRITTEN through a data-member pointer? Show the one-line syntax.
-// ---------------------------------------------------------------------------
-struct Rec {
-    int id;
-    std::string name;
-    std::string tag() const { return name + "!"; }
-};
-
-int read_id_pmd(const Rec& /*r*/) {
-    // TODO(8a)
-    return 0;
-}
-
-int read_id_invoke(const Rec& /*r*/) {
-    // TODO(8b)
-    return 0;
-}
-
-template <class Proj>
-auto project(const Rec& /*r*/, Proj /*p*/) {
-    // TODO(8c)
-    return 0;
-}
-
-// ===========================================================================
-// STEP 9 — surrogate call functions (objects callable via a conversion)
+// STEP 8 — surrogate call functions (objects callable via a conversion)
 // ===========================================================================
 //
 // An object can be callable with obj(args) even with NO operator() — if its
@@ -485,13 +427,13 @@ auto project(const Rec& /*r*/, Proj /*p*/) {
 // calls through the pointer. This is not exotic trivia: it is EXACTLY how a
 // captureless lambda (step 5b) becomes a function pointer.
 //
-// TODO(9a)  Handler — complete the conversion operator so a Handler is callable.
+// TODO(8a)  Handler — complete the conversion operator so a Handler is callable.
 //   The struct below declares `using Fn = int(*)(int);` and nothing else.
 //   Add:  operator Fn() const { return [](int x){ return x + 1; }; }
 //   Note there is deliberately NO operator() — the conversion is what makes
 //   Handler{}(41) legal.
 //
-// TODO(9b)  call_object(h, x) -> int
+// TODO(8b)  call_object(h, x) -> int
 //   Call the Handler: h(x). An object with no operator(), called like a function.
 //
 // GIVEN exhibit: Dual has TWO conversions. The compiler makes one surrogate per
@@ -499,17 +441,17 @@ auto project(const Rec& /*r*/, Proj /*p*/) {
 // here by ARITY. Dual{}(9) selects the (int) surrogate; Dual{}(9,9) the
 // (int,int) one. Nothing to implement; the tests read it.
 //
-// QUESTION(9): if a class had BOTH an operator() and a conversion-to-function-
+// QUESTION(8): if a class had BOTH an operator() and a conversion-to-function-
 //   pointer that matched the same call, what would obj(args) do? (Consider that
 //   overload resolution sees them together.)
 // ---------------------------------------------------------------------------
 struct Handler {
     using Fn = int (*)(int);
-    // TODO(9a): add the conversion operator (operator Fn)
+    // TODO(8a): add the conversion operator (operator Fn)
 };
 
 int call_object(Handler /*h*/, int /*x*/) {
-    // TODO(9b)
+    // TODO(8b)
     return 0;
 }
 
@@ -521,65 +463,46 @@ struct Dual {                                   // GIVEN exhibit — do not modi
 };
 
 // ===========================================================================
-// STEP 10 — the standard adaptors: mem_fn, bind, reference_wrapper, not_fn
+// STEP 9 — the standard adaptors: bind, reference_wrapper
 // ===========================================================================
 //
 // Each of these is itself a function object the library hands out — none is a
 // new KIND of callable, they WRAP or TRANSFORM the kinds above.
 //
-// TODO(10a)  mem_fn_deposit(acc, amount) -> int
-//   std::mem_fn wraps a pointer-to-member into an ordinary callable that takes
-//   the OBJECT first: auto d = std::mem_fn(&Account::deposit); return d(acc, amount);
-//
-// TODO(10b)  bind_minus10(x) -> int
+// TODO(9a)  bind_minus10(x) -> int
 //   Partial application with std::bind: fix sub's SECOND argument to 10.
 //     using namespace std::placeholders;
 //     auto f = std::bind(sub, _1, 10);   return f(x);
 //
-// TODO(10c)  bind_flip(a, b) -> int
+// TODO(9b)  bind_flip(a, b) -> int
 //   std::bind can also REORDER: bind sub as (_2, _1) so f(a,b) computes b - a.
 //
-// TODO(10d)  count_via_ref(c) -> int
+// TODO(9c)  count_via_ref(c) -> int
 //   std::reference_wrapper (from std::ref) forwards a call to the SAME object,
 //   so state is shared (contrast FIXME(B), where a std::function COPY reset it).
 //     auto rc = std::ref(c);  rc(); rc();  return c.n;   // c advanced to 2
 //
-// TODO(10e)  is_not_pos(x) -> bool
-//   std::not_fn negates a predicate: auto np = std::not_fn(is_pos); return np(x);
-//
-// QUESTION(10): std::bind existed since C++11 but is now usually avoided for
+// QUESTION(9): std::bind existed since C++11 but is now usually avoided for
 //   partial application. Name the C++20 facility that fixes leading arguments
 //   without placeholders, and one reason a lambda is often preferred over bind.
 // ---------------------------------------------------------------------------
-inline bool is_pos(int x) { return x > 0; }
-
-int mem_fn_deposit(Account& /*acc*/, int /*amount*/) {
-    // TODO(10a)
-    return 0;
-}
-
 int bind_minus10(int /*x*/) {
-    // TODO(10b)
+    // TODO(9a)
     return 0;
 }
 
 int bind_flip(int /*a*/, int /*b*/) {
-    // TODO(10c)
+    // TODO(9b)
     return 0;
 }
 
 int count_via_ref(Counter& /*c*/) {
-    // TODO(10d)
+    // TODO(9c)
     return 0;
 }
 
-bool is_not_pos(int /*x*/) {
-    // TODO(10e)
-    return false;
-}
-
 // ===========================================================================
-// STEP 11 — standard function objects, and querying callability
+// STEP 10 — standard function objects, and querying callability
 // ===========================================================================
 //
 // The library ships ready-made function objects for the operators (std::plus,
@@ -589,38 +512,38 @@ bool is_not_pos(int /*x*/) {
 // a temporary key. Separately, std::is_invocable / std::invoke_result_t let
 // code ASK, at compile time, whether a call is well-formed and what it yields.
 //
-// TODO(11a)  fold_mul(v) -> int
+// TODO(10a)  fold_mul(v) -> int
 //   Reduce with a standard function object as the operation:
 //     return std::accumulate(v.begin(), v.end(), 1, std::multiplies<>{});
 //
-// TODO(11b)  set_contains(s, key) -> bool
+// TODO(10b)  set_contains(s, key) -> bool
 //   s is std::set<std::string, std::less<>> — a TRANSPARENT comparator. Look up
 //   a const char* key WITHOUT constructing a std::string:
 //     return s.count(key) != 0;
 //   (Without the transparent std::less<>, this would build a temporary string.)
 //
-// TODO(11c)  accepts<F, Args...>()  [constexpr]  -> bool
+// TODO(10c)  accepts<F, Args...>()  [constexpr]  -> bool
 //   Report whether F is callable with Args...:
 //     return std::is_invocable_v<F, Args...>;
 //   This is the trait form of "is it a callable" — the query behind std::invoke.
 //
-// QUESTION(11): std::invoke_result_t<BinOp, int, int> names a type. Which type,
+// QUESTION(10): std::invoke_result_t<BinOp, int, int> names a type. Which type,
 //   and what is the C++20 CONCEPT that expresses the same "is invocable" query
 //   as a template constraint (the concept form of std::is_invocable)?
 // ---------------------------------------------------------------------------
 int fold_mul(const std::vector<int>& /*v*/) {
-    // TODO(11a)
+    // TODO(10a)
     return 0;
 }
 
 bool set_contains(const std::set<std::string, std::less<>>& /*s*/, const char* /*key*/) {
-    // TODO(11b)
+    // TODO(10b)
     return false;
 }
 
 template <class F, class... Args>
 constexpr bool accepts() {
-    // TODO(11c)
+    // TODO(10c)
     return false;
 }
 
@@ -629,9 +552,9 @@ constexpr bool accepts() {
 //   The picture above is complete for C++17. Newer standards add more callable
 //   plumbing, left out here so the file builds on a C++17 compiler:
 //     * std::bind_front (C++20) / std::bind_back (C++23) — placeholder-free
-//       partial application (the QUESTION(10) answer for bind_front).
+//       partial application (the QUESTION(9) answer for bind_front).
 //     * the std::invocable / std::predicate / std::relation CONCEPTS (C++20) —
-//       constraint forms of the is_invocable traits used in step 11.
+//       constraint forms of the is_invocable traits used in step 10.
 //     * range adaptor closures (C++20): std::views::filter(pred) is a function
 //       object; `range | closure` is `closure(range)`.
 //     * std::move_only_function (C++23) — like std::function but holds a
@@ -766,53 +689,33 @@ int main() {
     // ---- step 8 ----------------------------------------------------------
 #if STEP8_READY
     {
-        Rec r{7, "neo"};
-        assert(read_id_pmd(r) == 7);
-        assert(read_id_invoke(r) == 7);          // object-first invoke on a DATA member
-        assert(project(r, &Rec::id) == 7);       // data-member pointer as projection
-        assert(project(r, &Rec::name) == std::string("neo"));
-        assert(project(r, &Rec::tag) == std::string("neo!"));   // member function, same invoke
-        assert(project(r, [](const Rec& x) { return x.id + 1; }) == 8);  // lambda, same invoke
-        std::cout << "step 8  pointers to data members ..... ok\n";
-    }
-#else
-    std::cout << "step 8  pointers to data members ..... TODO (flip STEP8_READY)\n";
-#endif
-
-    // ---- step 9 ----------------------------------------------------------
-#if STEP9_READY
-    {
         assert(Handler{}(41) == 42);             // object called with NO operator()
         Handler h;
         assert(call_object(h, 5) == 6);
         assert(Dual{}(9) == 1);                  // 1 arg  -> selects the (int) surrogate
         assert(Dual{}(9, 9) == 2);               // 2 args -> selects the (int,int) surrogate
-        std::cout << "step 9  surrogate call functions ..... ok\n";
+        std::cout << "step 8  surrogate call functions ..... ok\n";
     }
 #else
-    std::cout << "step 9  surrogate call functions ..... TODO (flip STEP9_READY)\n";
+    std::cout << "step 8  surrogate call functions ..... TODO (flip STEP8_READY)\n";
 #endif
 
-    // ---- step 10 ---------------------------------------------------------
-#if STEP10_READY
+    // ---- step 9 ----------------------------------------------------------
+#if STEP9_READY
     {
-        Account a{100};
-        assert(mem_fn_deposit(a, 50) == 150);    // mem_fn wraps a PMF (object first)
         assert(bind_minus10(25) == 15);          // bind: fix the 2nd argument
         assert(bind_flip(3, 10) == 7);           // bind: reorder arguments (10 - 3)
         Counter c;
         assert(count_via_ref(c) == 2);           // reference_wrapper shares state
         assert(c.n == 2);
-        assert(is_not_pos(-2) == true);          // not_fn negates the predicate
-        assert(is_not_pos(5) == false);
-        std::cout << "step 10 adaptors: mem_fn/bind/ref .... ok\n";
+        std::cout << "step 9  adaptors: bind/ref ........... ok\n";
     }
 #else
-    std::cout << "step 10 adaptors: mem_fn/bind/ref .... TODO (flip STEP10_READY)\n";
+    std::cout << "step 9  adaptors: bind/ref ........... TODO (flip STEP9_READY)\n";
 #endif
 
-    // ---- step 11 ---------------------------------------------------------
-#if STEP11_READY
+    // ---- step 10 ---------------------------------------------------------
+#if STEP10_READY
     {
         assert(fold_mul(std::vector<int>{1, 2, 3, 4}) == 24);   // std::multiplies as the op
         std::set<std::string, std::less<>> s{"apple", "pear"};
@@ -822,10 +725,10 @@ int main() {
         assert((accepts<BinOp, int, int>()) == true);           // is_invocable: yes
         assert((accepts<BinOp, int>()) == false);               // wrong arity: no
         assert((accepts<decltype(&Account::deposit), Account&, int>()) == true);  // PMF is invocable
-        std::cout << "step 11 std function objects & traits  ok\n";
+        std::cout << "step 10 std function objects & traits  ok\n";
     }
 #else
-    std::cout << "step 11 std function objects & traits  TODO (flip STEP11_READY)\n";
+    std::cout << "step 10 std function objects & traits  TODO (flip STEP10_READY)\n";
 #endif
 
     std::cout << "\ndone\n";
