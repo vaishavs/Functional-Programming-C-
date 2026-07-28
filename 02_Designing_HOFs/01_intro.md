@@ -145,6 +145,8 @@ The allowed direction is `noexcept`-pointer to plain-pointer: assigning a strong
 6. Store them in arrays
 
 #### Surrogate Call Functions
+In C++, **surrogate call functions** are implicit entities *synthesized by the compiler* during overload resolution. The mechanism activates when an object of class type is invoked using function call syntax, but instead of possessing a direct `operator()`, the class provides a user-defined conversion operator that yields a function pointer or a function reference.
+
 Consider a class that provides only a conversion to a function pointer:
 ```
 struct Handler {
@@ -160,7 +162,18 @@ The call `h(41)` type-checks even though `Handler` has no call operator. The com
 
 This is a somewhat exotic capability to build deliberately, but it exists so that the language can define, uniformly, what it means to call any object — including those whose "callability" is expressed as a convertibility to a function.
 
-A class may offer several conversions to different function-pointer types. The compiler then synthesizes one surrogate call function per conversion, and ordinary overload resolution selects among them based on the call arguments — the same resolution process that chooses among overloaded functions:
+When evaluating a function call expression `object(arguments)`, the compiler constructs a candidate set for overload resolution, which includes:
+
+* Standard member `operator()` functions.
+* **Surrogate call functions** derived from applicable conversion operators.
+
+For every conversion operator yielding a function pointer or function reference type with a specific signature, a corresponding "surrogate" call function is implicitly generated. If overload resolution selects the surrogate, execution involves two steps:
+
+1. Invoking the conversion operator to obtain the function pointer.
+2. Invoking the underlying function using the obtained pointer.
+
+A class may offer several conversions to different function-pointer types. The compiler then synthesizes one surrogate call function per conversion, and ordinary overload resolution selects among them based on the call arguments — the same resolution process that chooses among overloaded functions.
+
 ```
 using FpI = long(*)(int);
 using FpD = long(*)(double);
@@ -175,6 +188,38 @@ m(10);    // 1 — an int argument makes the FpI surrogate the best match
 m(3.5);   // 2 — a double argument selects the FpD surrogate
 ```
 Each surrogate participates as a candidate; the one whose parameter best matches the argument wins. If both an `operator()` and one or more conversions are present, all of them compete together, and an unbreakable tie is an ambiguity error — the usual overload-resolution outcome.
+
+Surrogate call functions can also participate in standard overload resolution alongside `operator()` members. The compiler evaluates the arguments against all available options to determine the best match.
+
+```cpp
+#include <iostream>
+
+void fallback_function(double) {
+    std::cout << "Surrogate invoked (double).\n";
+}
+
+struct OverloadDemo {
+    // Standard function call operator
+    void operator()(int) const {
+        std::cout << "Member operator() invoked (int).\n";
+    }
+
+    // Conversion yielding a surrogate call function candidate
+    operator void(*)(double)() const {
+        return fallback_function;
+    }
+};
+
+int main() {
+    OverloadDemo demo;
+
+    demo(10);    // Exact match for int: Invokes operator()(int)
+    demo(3.14);  // Exact match for double: Invokes surrogate function via conversion
+
+    return 0;
+}
+
+```
 
 ## Function references
 Just as there is a pointer to a function, an alias (reference) can be created for a function name. The function name binds directly to the reference rather than decaying to a pointer.
