@@ -24,7 +24,6 @@ Any callable entities that behave like functions, such as function pointers, lam
 
 ## Implementation
 The below table summarizes the different implementations of HOFs.
-Functors and the virtual callable interface are now one row (carrying the functors link). Everything else is unchanged.
 
 | Method | Description | Performance | Limitations |
 | --- | --- | --- | --- |
