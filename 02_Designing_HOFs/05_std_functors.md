@@ -276,3 +276,7 @@ pts.contains(Point{3, 4});  // true
 ```
 
 The combiner above is intentionally simple; production code often uses a stronger mix to reduce collisions, but the shape — hash each member with `std::hash` and combine — is the standard pattern.
+
+References:
+* https://en.cppreference.com/cpp/utility/functional
+* https://www.lrde.epita.fr/dload/20020619-Seminar/cpp_function_objects.pdf
