@@ -391,4 +391,9 @@ While raw function objects are efficient, modern C++ (C++11 and later) provides 
 * ```std::invoke```: A universal way to call any callable (added in C++17) that simplifies the syntax for member function pointers.
 * ```std::function_fref```: A type-safe function reference
 
-Reference: https://www.youtube.com/watch?v=i7-jWzWOBbk&t=79s
+References:
+
+* https://www.youtube.com/watch?v=i7-jWzWOBbk&t=79s
+* https://stackoverflow.com/questions/11354737/how-does-surrogate-call-function-work
+* https://stackoverflow.com/questions/480248/function-references
+* https://medium.com/@k10abhilasha/pointer-in-c-function-pointers-471908aa4c0e
