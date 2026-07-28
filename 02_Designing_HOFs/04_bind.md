@@ -142,7 +142,31 @@ int main() {
     return 0;
 }
 ```
-Hence, one way to overcome them is to bind by reference.
+The two lighter binders below cover the most common patterns without the pitfalls.
+### `std::bind_front` (C++20)
+
+The `std::bind_front(f, args...)` binds the *leading* arguments and forwards the rest in order — no placeholders, no reordering, and it forwards rather than eagerly decaying in the ways `bind` does:
+
+```cpp
+auto from100 = std::bind_front(sub, 100);   // fix the 1st argument to 100
+from100(40);                                 // 60  (100 - 40)
+```
+
+This is the idiomatic modern binder for "fix the first few arguments", and a common way to bind a member function together with its object: `std::bind_front(&Widget::scaled, w)`.
+
+### `std::bind_back` (Since C++23, GCC14)
+`std::bind_back(f, args...)` is the mirror image: it binds the *trailing* arguments and forwards the leading ones:
+
+```cpp
+// Illustrative (C++23):
+auto minus3 = std::bind_back(sub, 3);   // fix the last argument to 3
+minus3(10);                              // 7   (10 - 3)
+```
+
+Together, `bind_front` and `bind_back` cover the overwhelming majority of real binding needs without placeholders.
+
+Another way to overcome them is to bind by reference.
+
 # Binding by reference
 Binding by reference can be useful when the bound parameter needs to reflect any changes made to the original variable. This means that the bound function will use the current value of the variable when invoked, not the value it had when the function was created. To bind by reference, ```std::ref``` is used for non-const references and ```std::cref``` is used for const references. The ```std::ref``` and ```std::cref``` are helper functions defined in ```<functional>``` header that are used to generate a ```std::reference_wrapper```. They automatically convert to a raw reference (```T&```) when passed to a function that expects the underlying type.
 ```cpp
