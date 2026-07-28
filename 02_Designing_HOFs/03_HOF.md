@@ -39,7 +39,6 @@ A related category is the **adaptors that produce or transform** a callable to f
 
 | Method | Description | Performance | Limitations |
 | --- | --- | --- | --- |
-| `std::mem_fn` | Wraps a pointer-to-member into an ordinary callable (object-first). | High (thin, inlinable) | Wraps member pointers only; a lambda/projection often reads as well |
 | `std::bind` (C++11) | Partial application with placeholders (`_1`, `_2`) and argument reordering. | Medium (eager arg copies; opaque type; often not inlined) | Eager-copy surprises (needs `std::ref` for reference args); composes poorly; largely superseded by lambdas / `bind_front` |
 | `std::bind_front` (C++20) / `std::bind_back` (C++23) | Bind leading / trailing arguments, no placeholders; forwards the rest. | High (light; concrete type, inlinable) | `bind_back` is C++23; for reordering use `std::bind` or a lambda |
 | `std::not_fn` (C++17) | Returns the logical negation of a predicate. | High (thin wrapper) | Predicates only; replaced the removed `not1`/`not2` |
