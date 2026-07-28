@@ -265,3 +265,9 @@ int* ptr = nullptr;
 // This might compile but causes a crash/UB at runtime
 std::reference_wrapper<int> ref = *ptr; 
 ```
+
+Sources:
+
+* https://latedev.wordpress.com/2012/08/06/using-stdbind-for-fun-and-profit/
+* https://en.cppreference.com/cpp/utility/functional/bind_front
+* https://www.sandordargo.com/blog/2024/08/21/std-ref
