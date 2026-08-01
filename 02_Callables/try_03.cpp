@@ -155,21 +155,3 @@ int main() {
 
     return 0;
 }
-
-/* ============================================================================
- *  FULL WORKING SOLUTION CODE (FOR REFERENCE)
- * ============================================================================
- *
- * void (*fp)(int) = &doubleIt;                         // Fix 1
- * void (*sfp)(int) = &MathHelper::printSquare;         // Fix 2
- * void (&fr)(int) = doubleIt;                          // Fix 3
- * 
- * const MathHelper helperObj;                          // Fix 4 (Needs 'const' on operator() in class)
- * helperObj(val);
- * 
- * MathHelper surrogateObj;                             // Fix 5 (Needs 'explicit' removed from class)
- * FuncPtr sfc = surrogateObj; 
- * 
- * auto myLambda = [bonus](int n) mutable { ... };      // Fix 6 (Needs 'mutable' keyword)
- * ============================================================================
- */
