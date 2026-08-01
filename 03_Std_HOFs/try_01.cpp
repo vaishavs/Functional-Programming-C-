@@ -9,18 +9,11 @@
 //   TODO(n)   — implement from scratch.
 //   HINT      — a concrete nudge toward the implementation.
 //
-// Flip a step's TODOn_READY to 1 when finished. Steps are independent except
-// TODO 8, which reuses TODO 1 and TODO 4. The file ships compiling and running
-// with every step off.
-//
-//   Build : g++ -std=c++20 -Wall -Wextra -o algo algorithm_pipeline_exercise.cpp
-//   Run   : ./algo
 //   (std::erase_if needs C++20; everything else is C++17.)
 //
 // Two of these steps have undefined behaviour as their classic failure mode, so
 // a wrong answer can appear to "work" in a plain build. Rebuild with sanitizers
 // to have such mistakes named exactly:
-//   g++ -std=c++20 -g -fsanitize=address,undefined algorithm_pipeline_exercise.cpp
 // ===========================================================================
 
 #include <algorithm>
