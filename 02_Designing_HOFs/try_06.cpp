@@ -1,6 +1,4 @@
 // =============================================================================
-// function_objects_exercise.cpp
-//
 // A hands-on TODO/DEBUG exercise covering the major categories of function
 // objects found in the C++ Standard Library, most of which live in the
 // <functional> header.
