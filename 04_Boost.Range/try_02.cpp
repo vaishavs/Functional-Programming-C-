@@ -1,19 +1,19 @@
 // =============================================================================
 // Boost.Range bug-hunting exercise — ANNOTATED EDITION
 // =============================================================================
-// 26 bugs (Bug 0-25) across Boost.Range adaptors, Boost.Iterator internals, and
-// a few classic <algorithm> pitfalls. The CODE is exactly as originally written
-// — every bug still there, unfixed, on purpose. Each note gives the rule broken,
-// the consequence (compile error / UB / silent wrong answer), and the fix.
+// 24 bugs (Bug 0-23) across Boost.Range adaptors and a few classic <algorithm>
+// pitfalls. The CODE is exactly as originally written — every bug still there,
+// unfixed, on purpose. Each note gives the rule broken, the consequence
+// (compile error / UB / silent wrong answer), and the fix.
 //
 // Recurring threads:
 //   - `const auto&` / `auto&&` on a temporary extends THAT temporary's life, but
-//     not one used to BUILD it. Bugs 0, 5, 21, 24 are safe-today-but-fragile;
+//     not one used to BUILD it. Bugs 0, 5, 20 are safe-today-but-fragile;
 //     Bugs 11 and 13 genuinely dangle.
-//   - `filtered` is never random access, and `dropped` isn't a Boost.Range name
-//     (Bugs 7, 22, 24). `transformed` can be random access for READING, but is
-//     writable only if the function returns a reference (Bugs 1, 14, 20).
-//   - Views aren't Containers — no `.erase()` / `.insert()` (Bugs 10, 18).
+//   - `dropped` isn't a Boost.Range name at all (Bugs 7, 21); `transformed`
+//     yields freshly computed VALUES, not references into the source, so it can
+//     be read but never written through (Bugs 1, 14, 19).
+//   - Views aren't Containers — no `.erase()` / `.insert()` (Bugs 10, 17).
 //   - `remove_if` rearranges without shrinking (Bug 8).
 // =============================================================================
 
@@ -34,8 +34,8 @@ int main() {
     // Not dangling: `nums | transformed(...)` is a prvalue, and binding
     // `const T&` directly to a prvalue extends its life, so `squares` lives to
     // the end of `main`. What IS fragile:
-    //   1. it holds iterators into `nums` — dead if `nums` reallocates, is
-    //      destroyed, or is moved from (Bug 25);
+    //   1. it reads through `nums` — dead if `nums` reallocates, is destroyed,
+    //      or is moved from (Bug 23);
     //   2. extension reaches only the outermost temporary bound by the
     //      reference, never one fed INTO an adaptor (Bugs 11, 13);
     //   3. it is const and lazy — stores nothing, recomputes `x * x` per
@@ -45,12 +45,12 @@ int main() {
     const auto& squares = nums | transformed([](int x) { return x * x; }); // fragile, not literally dangling — see note above
 
     // --- BUG 1 — Sorting a const, lazily-computed range in place -------------
-    // `sort` needs a MUTABLE RandomAccessRange — it compares and swaps in place.
-    // `squares` is const (Bug 0), and `transformed` returns each value BY VALUE,
-    // so there is no lvalue to write back into; returning a value also caps the
-    // iterator category at bidirectional, so sort's checks reject it first.
-    // Expect a wall of template errors. Fix: push_back into a vector, sort that.
-    boost::range::sort(squares); // won't compile: const, and the transform result isn't writable random-access
+    // `sort` needs a MUTABLE range whose elements it can swap in place, and
+    // `squares` offers neither half: it is const (Bug 0), and `transformed`
+    // recomputes each value and hands it back BY VALUE, so there is no stored
+    // element anywhere for sort to write into. Expect a wall of template
+    // errors. Fix: push_back into a real vector, then sort that.
+    boost::range::sort(squares); // won't compile: const, and the transform result isn't writable
 
     // --- BUG 2 — Adaptor order changes MEANING (silent logic bug) ------------
     // Composition isn't commutative — each stage sees the previous stage's
@@ -84,7 +84,7 @@ int main() {
     // --- BUG 5 — Splitting a range into loose begin/end iterators ------------
     // Safe here (`auto&&` extends the prvalue, `nums` is durable), but the
     // PATTERN is the bug: `it1`/`it2` are decoupled from whatever keeps the view
-    // — and the predicate copy it owns — alive. One more layer of indirection
+    // — and the predicate it owns — alive. One more layer of indirection
     // (returned from a helper, stored as a member) and they dangle with nothing
     // at the call site looking wrong. Iterate the range directly.
     auto&& temp_range = nums | filtered([](int x) { return x % 2 == 0; });
@@ -163,7 +163,7 @@ int main() {
     }
 
     // --- BUG 13 — A range returned over a function-local temporary -----------
-    // Unambiguous, unlike Bugs 0/5/21: the temporary vector dies when
+    // Unambiguous, unlike Bugs 0/5/20: the temporary vector dies when
     // `make_range()` exits, before `r` ever binds. `auto&&`, `auto`, and
     // `const auto&` are all equally useless — reference binding extends the
     // small returned wrapper, it cannot resurrect a stack buffer from a function
@@ -174,17 +174,7 @@ int main() {
     };
     auto&& r = make_range(); // dangling before this line even finishes running — no binding style fixes it
 
-    // --- BUG 14 — operator[] on an adaptor: real here, never assumable -------
-    // `transform_iterator` preserves the base range's traversal category, so
-    // over a `vector` this is random access and `indexed[2]` most likely
-    // compiles, giving 9. What it isn't is durable: switch to a `std::list`, or
-    // insert a `filtered` stage, and `operator[]` stops compiling or stops being
-    // O(1) (Bug 24). The result is also a fresh prvalue, not a reference into
-    // `nums` — readable, not writable (Bug 1). Safer: `*std::next(begin, i)`.
-    auto indexed = nums | transformed([](int x) { return x * x; });
-    cout << "Indexed access: " << indexed[2] << endl; // likely works here, but only because transformed+vector happens to stay random-access
-
-    // --- BUG 15 — Writing into a transformed VIEW of an empty vector ---------
+    // --- BUG 14 — Writing into a transformed VIEW of an empty vector ---------
     // `copy` writes into EXISTING slots and never grows anything. `tmp_vec` is
     // empty, so the view spans zero elements with no room for `nums`'s five —
     // either a no-op or an out-of-bounds write (UB), since copy is driven by the
@@ -197,14 +187,14 @@ int main() {
         tmp_vec | transformed([](int x) { return x * x; })
     ); // destination is both empty and not a meaningful place to "write" a squared value into
 
-    // --- BUG 16 — for_each wants (first, last, unary_fn) ---------------------
+    // --- BUG 15 — for_each wants (first, last, unary_fn) ---------------------
     // Two mismatches: `std::for_each` takes a PAIR of iterators, not a range
     // object, so nothing matches; and `std::greater<int>` is BINARY, while
     // `for_each` calls `f(*it)` with one argument — no single-arg `operator()`.
     // Fix: a range-based for loop, or pass begin/end plus a unary lambda.
     std::for_each(squares, std::greater<int>{}); // wrong argument shape AND wrong arity of functor
 
-    // --- BUG 17 — Dereferencing a find() result unchecked --------------------
+    // --- BUG 16 — Dereferencing a find() result unchecked --------------------
     // `found_range` filters to elements > 10 — EMPTY. `find` signals failure by
     // returning `end()`, which here equals `begin()`. `*pos` dereferences a
     // sentinel: UB, full stop, not "maybe wrong". Every find-family result needs
@@ -213,7 +203,7 @@ int main() {
     auto pos = boost::range::find(found_range, 11);
     cout << "Found: " << *pos << endl; // pos == end() here — dereferencing it is UB, not just "maybe wrong"
 
-    // --- BUG 18 — Calling a Container member (.erase()) on a view ------------
+    // --- BUG 17 — Calling a Container member (.erase()) on a view ------------
     // `filtered_range` is a non-owning window onto `nums`, so it has no
     // `.erase()`, `.insert()`, or `.push_back()` — the elements aren't its to
     // remove. A hard compile error, which makes this one of the SAFER mistakes
@@ -224,25 +214,25 @@ int main() {
         nums.begin(), nums.end()
     );
 
-    // --- BUG 19 — std::vector<T&> is ill-formed ------------------------------
+    // --- BUG 18 — std::vector<T&> is ill-formed ------------------------------
     // `squares` was declared `const auto&` (Bug 0), and `decltype` on a name
     // whose declared type is a reference reproduces the reference — so this asks
     // for `vector<T&>`, which containers forbid (they need an Erasable object
     // type). Expect a deep error bottoming out in `std::allocator<T&>`. Even
     // with a proper value type, N stored views multiply every lifetime hazard
-    // above by N.
+    // above (Bugs 0, 5, 11-13, 20) by N.
     vector<decltype(squares)> vec_of_ranges; // decltype(squares) is a REFERENCE type — vector<T&> doesn't compile
 
-    // --- BUG 20 — std::random_shuffle was removed in C++17 -------------------
+    // --- BUG 19 — std::random_shuffle was removed in C++17 -------------------
     // Primary failure: deprecated in C++14, REMOVED in C++17 for its reliance on
     // `std::rand()` (poor quality, not thread-safe, globally seeded), so under a
     // modern standard <algorithm> doesn't declare the name at all. Replacement:
     // `std::shuffle(first, last, urbg)` with an explicit generator.
     // Also, on an older standard, it takes an iterator PAIR, not a range (as in
-    // Bug 16) — and `squares` is const and unswappable anyway (Bugs 0, 1).
+    // Bug 15) — and `squares` is const and unswappable anyway (Bugs 0, 1).
     std::random_shuffle(squares); // removed in C++17+, wrong argument shape, and squares isn't mutable/swappable anyway
 
-    // --- BUG 21 — reversed over a named lvalue: the Bug 0 story again --------
+    // --- BUG 20 — reversed over a named lvalue: the Bug 0 story again --------
     // `reversed` is a plain adaptor tag, not a call. The resulting prvalue is
     // lifetime-extended by `const auto&`, and `nums` is durable, so this is
     // memory-safe in practice. Flagged because it's structurally identical to
@@ -254,48 +244,34 @@ int main() {
     }
     cout << endl;
 
-    // --- BUG 22 — Bug 7 again, plus: filtered ranges aren't Sized ------------
+    // --- BUG 21 — Bug 7 again, plus: filtered ranges aren't Sized ------------
     // `dropped` still doesn't exist (Bug 7), so this fails to compile first.
     // Granting a working "skip N": filtering leaves {2, 4}, and dropping 100
     // means walking 100 steps through two elements. A filtered range can't
     // report its length without testing every element — it is not a Sized Range,
-    // so there's no O(1) `.size()` to clamp against, and a naive implementation
-    // stepping begin forward N times (all a bidirectional `filter_iterator`
-    // allows, Bug 24) runs straight past `end()`: UB, then UB again on the
-    // dereference below.
+    // so there's no O(1) `.size()` to clamp N against, and a naive
+    // implementation stepping forward N times runs straight past `end()`: UB the
+    // moment it happens, then UB again on the dereference below.
     auto dropped2 = nums | filtered([](int x) { return x % 2 == 0; }) | dropped(100); // `dropped` isn't real, and 100 far exceeds the 2 elements that would survive filtering
     cout << "dropped2 front: " << *boost::begin(dropped2) << endl; // near-certain UB: advances (and then dereferences) past end()
 
-    // --- BUG 23 — count_if wants a unary predicate ---------------------------
+    // --- BUG 22 — count_if wants a unary predicate ---------------------------
     // `count_if` calls `pred(element)` with ONE argument; `std::greater<int>` is
     // a two-argument comparator with no unary overload, so nothing binds and it
-    // fails to compile — Bug 16's mistake against a different algorithm. It also
+    // fails to compile — Bug 15's mistake against a different algorithm. It also
     // carries no "greater than WHAT?".
     // Fix: boost::range::count_if(nums, [](int x){ return x > 3; });
     auto count = boost::range::count_if(nums, std::greater<int>{}); // std::greater<int> takes two arguments; count_if's predicate takes one
 
-    // --- BUG 24 — Sorting a filtered range fails on iterator category --------
-    // The lifetime story is a red herring: `auto&&` extends the prvalue and
-    // `nums` is durable, so nothing dangles. The guaranteed failure is that
-    // `boost::filter_iterator` is forced down to `bidirectional_traversal_tag`
-    // in filter_iterator.hpp regardless of the base iterator — inherent to
-    // filtering, since reaching the Nth survivor means testing everything in
-    // between, so O(1) jumps are impossible. `sort` requires random access, so
-    // no filtered range over any container will compile here.
-    {
-        auto&& local_range = nums | filtered([](int x) { return x > 2; });
-        boost::range::sort(local_range); // fails to compile: filter_iterator is capped at bidirectional, sort needs random access
-    } // (the lifetime story here is a red herring — this line was never going to compile)
-
-    // --- BUG 25 — Reading a moved-from container, and every view over it -----
+    // --- BUG 23 — Reading a moved-from container, and every view over it -----
     // `std::move` moves nothing — it's a cast that lets the move constructor
     // steal the buffer, leaving `nums` valid but UNSPECIFIED (empty in practice
     // on every mainstream library, which is an implementation choice, not a
     // guarantee). Using it afterward for anything but destruction or
     // reassignment is unspecified behavior. The sharper point: `squares`,
-    // `filtered_squares`, `offsetted`, `temp_range`, `found_range`, `indexed`,
-    // `reversed_ref` and the rest are still in scope, each holding iterators
-    // taken from `nums` before its buffer changed owners. They may still "work"
+    // `filtered_squares`, `offsetted`, `temp_range`, `found_range`, `dropped`,
+    // `dropped2` and `reversed_ref` are all still in scope, each reading through
+    // `nums` from before its buffer changed owners. They may still "work"
     // depending on move internals — which is the same mistake as everything else
     // here. Treat anything built over a container as invalid once it is moved from.
     vector<int> moved_nums = move(nums);
