@@ -22,8 +22,6 @@
 // factorB are unused; that warning is expected, and it will disappear on
 // its own once your fix for TODO 1 actually uses those two variables.
 //
-// Build with:   g++ -std=c++17 -Wall -Wextra -o function_objects_exercise function_objects_exercise.cpp
-// Run with:     ./function_objects_exercise
 // =============================================================================
 
 #include <algorithm>   // Supplies std::sort, std::count_if, and std::is_sorted, which several exercises rely on.
