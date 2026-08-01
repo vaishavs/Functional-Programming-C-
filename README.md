@@ -18,9 +18,9 @@ For more sources, refer [this page](https://www.google.com/url?sa=t&rct=j&q=&esr
   
    ii) Examples
 
-2. Designing higher-order functions
+2. Callable entities
    
-   i) Callable entities
+   i) Introduction to callable entities
    
    ii) Type-erased wrappers
    
