@@ -165,6 +165,14 @@ minus3(10);                              // 7   (10 - 3)
 
 Together, `bind_front` and `bind_back` cover the overwhelming majority of real binding needs without placeholders.
 
+**One pitfall carries over from `std::bind`, though.** The "forwards rather than eagerly decaying" behavior above describes what happens *when the returned callable is invoked* — it does not mean the *initial* bind is free. Passing an lvalue by value at the `bind_front`/`bind_back` call site still decay-copies it into storage right then, exactly as `std::bind` would:
+```cpp
+std::string big_message = /* ... */;
+auto printer  = std::bind_front(log_message, big_message);              // copies big_message right here
+auto printer2 = std::bind_front(log_message, std::cref(big_message));   // binds a reference instead — no copy
+```
+`bind_front`/`bind_back` remove the placeholder-reordering and duplication pitfalls, not the up-front copying one.
+
 Another way to overcome them is to bind by reference.
 
 # Binding by reference
