@@ -1,9 +1,9 @@
 # Type-Erased Callable Wrappers
 *Type erasure* is the technique of hiding a value's concrete type behind a fixed interface, storing it in a way that later code can use without knowing what it originally was. A type-erased callable wrapper stores whatever callable it is given, remembers how to invoke it, and presents a single call signature `R(Args...)`.
 
-This flexibility has a price that is important to state up front, because it is the central trade-off for the whole file. Because the concrete callable's size is not known at the wrapper's compile time, the wrapper may need to **allocate** on the heap to store it — although implementations apply a *small buffer optimization* (SBO) that stores small callables inline and avoids allocation for them.
+But because the concrete callable's size is not known at the wrapper's compile time, the wrapper may need to **allocate** on the heap to store it — although implementations apply a *small buffer optimization* (SBO) that stores small callables inline and avoids allocation for them.
 
-And because the call goes through an indirection (a virtual-like dispatch to the erased callable), it is typically **not inlined**, unlike a direct call on a known function-object type. Type-erased wrappers therefore buy uniformity and storage at the cost of possible allocation and lost inlining, and belong at API and storage boundaries rather than in hot inner loops.
+And since the call goes through an indirection (a virtual-like dispatch to the erased callable), it is typically **not inlined**, unlike a direct call on a known function-object type. Type-erased wrappers therefore buy uniformity and storage at the cost of possible allocation and lost inlining, and belong at API and storage boundaries rather than in hot inner loops.
 
 ## std::function
 The ```std::function``` (defined in the ```<functional>``` header) is a general-purpose polymorphic function wrapper that stores any functions, lambdas, functors, or member functions that matches a specific signature. It **owns** a copy of whatever callable it is assigned, is itself **copyable and assignable**, and can be **empty**. It is versatile and safer than raw function pointers. If no target is present, the wrapper is "empty," and calling it throws a ```std::bad_function_call``` exception.
@@ -63,6 +63,34 @@ Here, `target` returns `nullptr` if the requested type does not match, so it is 
 `std::function` copies its target (so a large captured state is copied with it), may allocate when the target does not fit the SBO, and dispatches indirectly. These costs
 are the reason the C++23 and C++26 additions below exist.
 
+#### Pitfalls
+* **Using it as a plain by-value callback parameter.** A function that only *calls* the callback during its own execution, and never stores it, still pays for a copy — and possibly a heap allocation — on every single invocation:
+  ```cpp
+  // Needlessly forces a copy (and possibly an allocation) of the callback
+  // on every call, even though the callback is only used right here.
+  void for_each_item(const std::vector<int>& items, std::function<void(int)> callback) {
+      for (int i : items) callback(i);
+  }
+  ```
+  When the callable is only needed for the duration of the call, `std::function_ref` (below) is the non-owning, allocation-free alternative.
+* **Comparing two `std::function` objects with `==`.** `std::function` only defines `operator==` against `nullptr`, not against another `std::function` — there is no general way to decide whether two arbitrary erased callables are "the same" one:
+  ```cpp
+  std::function<void()> f1 = [] {};
+  std::function<void()> f2 = [] {};
+  if (f1 == f2) { /* ... */ }   // does not compile: no operator== between two std::function objects
+  ```
+* **Assuming that owning the callable makes the whole call safe.** `std::function` owns a copy of the *closure object*, but if that closure captured something *by reference*, the reference itself is still just a reference — nothing about `std::function` extends the lifetime of what it points to:
+  ```cpp
+  std::function<void()> make_printer() {
+      int local = 42;
+      return [&local]() { std::cout << local; };   // captures local BY REFERENCE
+  }   // local's storage ends here; the compiler does not warn about this
+
+  auto printer = make_printer();
+  printer();   // undefined behavior: reads a destroyed stack variable
+  ```
+* **Assuming the small buffer optimization is guaranteed.** The standard does not mandate an SBO or a minimum inline size; whether a given lambda's capture avoids allocation is implementation-defined and differs between libstdc++, libc++, and MSVC's STL. Code that depends on "this capture is definitely small enough to stay inline" is leaning on a detail the standard leaves unspecified.
+
 ## std::function_ref
 Starting from C++26 and GCC16 toolchain, ```std::function_ref```, defined in ```<functional>``` header, is a non-owning reference to a callable object. It acts as a type-erased "view" into a function, lambda, or functor. It does not store a copy of the callable; it only stores a reference to it. It is the callable analogue of `std::string_view` — cheap to pass, but valid only while the referenced callable outlives it. It is typically the size of two pointers, making it highly efficient to pass by value. It is similar to a raw function pointer but more flexible.
 
@@ -115,12 +143,44 @@ void risky_func() {
     fr(); // The temporary lambda is gone by this point
 }
 ```
-* Dangling References: When returning a lambda, local variables should not be captured by reference (```[&]```) if those variables will go out of scope after the function returns. They should always be captured by value (```[=]``` or ```[var]```) for returned lambdas.
-* Return Type Deduction: ```auto``` return type requires the function definition to be visible at the call site.
 
 A ```const std::function_ref``` can still invoke a mutable lambda because it does not own the state being mutated.
 
 The `std::function_ref` is the right choice for a **function parameter** that will call the supplied callable *during the call* and not retain it afterwards — the overwhelmingly common case for callback parameters. It replaces the frequent misuse of `std::function` as a by-value parameter (which needlessly copies and may allocate) with a zero-overhead view. Because it does not extend lifetime, it must never be stored beyond the referenced callable's lifetime; for storage, an owning wrapper is required.
+
+#### Pitfalls
+The dangling-temporary example above is the most common mistake, but the same non-owning nature causes trouble in two other recurring shapes:
+* **Storing it as a class member.** A `std::function_ref` data member looks like an ordinary callback field, but it only ever refers to whatever was passed in at the time it was set — it does not keep that callable alive:
+  ```cpp
+  class Widget {
+      std::function_ref<void()> callback_;   // non-owning: dangerous as a stored member
+  public:
+      void set_callback(std::function_ref<void()> cb) { callback_ = cb; }
+      void fire() { callback_(); }
+  };
+
+  void setup(Widget& w) {
+      int local = 10;
+      w.set_callback([&local] { std::cout << local; });   // a temporary lambda referring to a local
+  }   // both the lambda and 'local' are gone by the time setup() returns
+
+  Widget w;
+  setup(w);
+  w.fire();   // undefined behavior: callback_ refers to objects that no longer exist
+  ```
+* **Using it for deferred or asynchronous work.** Anything that queues a callable to run later — a task queue, an event system, a coroutine continuation — needs to *own* that callable, not merely view it:
+  ```cpp
+  // BAD: none of these views are guaranteed to still be valid when run_all() executes.
+  class TaskQueue {
+      std::vector<std::function_ref<void()>> tasks_;
+  public:
+      void enqueue(std::function_ref<void()> t) { tasks_.push_back(t); }
+      void run_all() { for (auto t : tasks_) t(); }
+  };
+  ```
+  For storage or deferred invocation, reach for `std::function` or `std::move_only_function` instead — the wrappers below actually own their target.
+
+As a rule of thumb: if the callable's lifetime is guaranteed to be "at least as long as this one function call," `std::function_ref` is safe and cheap; the moment that guarantee is unclear, it is the wrong tool.
 
 ## `std::move_only_function`
 Many useful callables cannot be copied — for example a lambda that has captured a `std::unique_ptr` by move. The `std::function` requires a *copyable* target and so rejects them. The `std::move_only_function` (since C++23) removes that requirement: it is **move-only** and can therefore hold move-only callables.
@@ -136,9 +196,41 @@ mof2(7);                                                   // 107
 // mof2 = mof;   // would not compile: no copy
 ```
 
-Once moved, the original `std::move_only_function` object enters an empty state. Attempting to invoke an empty wrapper throws a `std::bad_function_call` exception.
+Once moved, the original `std::move_only_function` object enters an empty state. **Unlike `std::function`, invoking an empty `std::move_only_function` is undefined behavior, not a guaranteed thrown exception** — there is no `std::bad_function_call` safety net here, so it is entirely the caller's responsibility to know the wrapper is still populated before calling it. This distinction is easy to miss precisely because `std::function` trained everyone to expect a clean, catchable exception in this situation.
 
 The `std::move_only_function` also has a cleaner, more expressive signature template than `std::function`: the signature may carry `const`, `&`/`&&`, and `noexcept` qualifiers, which constrain *how* the wrapper may be called and are enforced by the type. For example, `std::move_only_function<int(int) const>` permits invocation on a `const` wrapper, and `std::move_only_function<int(int) noexcept>` promises the call will not throw. It deliberately provides **no** `target`/`target_type` inspection, which lets implementations be leaner. When a callable does not need to be copied — the common case for one-shot work items, deferred actions, and task queues — `std::move_only_function` is the more efficient and more precise choice.
+
+#### Pitfalls
+* **Trying to copy it.** `std::move_only_function` has no copy constructor, so anything that copies by value — including `push_back` on a `const&`, or simply assigning one variable to another — fails to compile:
+  ```cpp
+  std::move_only_function<void()> task = [] { /* ... */ };
+  std::vector<std::move_only_function<void()>> tasks;
+  tasks.push_back(task);              // error: use of deleted copy constructor
+  tasks.push_back(std::move(task));   // OK: moves the target in
+  ```
+* **Calling it after it has been moved from.** As noted above, this is *not* a safe, checked failure the way it is for `std::function`:
+  ```cpp
+  std::move_only_function<int(int)> original = [](int x) { return x * 2; };
+  std::move_only_function<int(int)> moved_to = std::move(original);
+
+  moved_to(5);     // fine: 10
+  original(5);     // undefined behavior -- original is now empty, and there is no exception to catch
+  ```
+  Treat a moved-from `std::move_only_function` the way you would a moved-from `std::unique_ptr`: assume it is empty, and do not call it.
+* **Expecting `target()`/`target_type()` like `std::function`.** These were deliberately left out, so trying to inspect the erased type does not compile:
+  ```cpp
+  std::move_only_function<void()> f = [] {};
+  auto* p = f.target<void(*)()>();   // error: 'class std::move_only_function<void()>' has no member named 'target'
+  ```
+* **Declaring a qualifier the assigned callable can't actually satisfy.** Because the signature's `const`/`noexcept`/ref-qualifiers are enforced by the type, a mismatched callable is rejected at the assignment itself, not discovered later at the call site:
+  ```cpp
+  int x = 0;
+  std::move_only_function<void() const> f = [x]() mutable { x++; };
+  // error: a mutable lambda cannot satisfy a const-qualified signature
+
+  std::move_only_function<void() noexcept> g = [] { throw std::runtime_error("oops"); };
+  // error: a potentially-throwing lambda cannot satisfy a noexcept-qualified signature
+  ```
 
 ## `std::copyable_function`
 
@@ -202,6 +294,20 @@ int main() {
 ```
 
 The intent is that new code preferring a copyable wrapper reach for `std::copyable_function`, leaving `std::function` in place for compatibility. Until C++26 is available, `std::function` remains the copyable option.
+
+#### Pitfalls
+* **Trying to store a move-only capture in it.** Being copyable is not optional — like `std::function`, `std::copyable_function` requires its target to be `CopyConstructible`, so a lambda that captured a `std::unique_ptr` by move is rejected exactly where `std::move_only_function` would have accepted it:
+  ```cpp
+  auto owned = std::make_unique<int>(42);
+  std::copyable_function<int()> f = [p = std::move(owned)]() { return *p; };
+  // error: the lambda's captured unique_ptr makes it move-only,
+  // but std::copyable_function requires a copyable target
+  ```
+  If the captured state must be move-only, `std::move_only_function` is the correct wrapper, not this one.
+* **Getting a qualifier wrong, the same way as `std::move_only_function`.** `std::copyable_function` enforces `const`/`noexcept`/ref-qualifiers just as strictly as `std::move_only_function` does (see its Pitfalls above) — declaring a `noexcept` signature and assigning a callable that can throw is rejected at compile time, not left to be discovered at runtime.
+* **Assuming it removes every cost of `std::function`, not just the const-correctness ones.** `std::copyable_function` fixes the qualifier and mutable-lambda-through-a-const-wrapper problems shown above, but it is still a type-erased, copyable wrapper: a large capture can still trigger a heap allocation, and a call still goes through an indirection. Reaching for it does not, by itself, make code allocation-free or inlinable — for that, `std::function_ref` (for non-owning calls) or a template parameter are still the tools to reach for.
+* **Assuming it is available wherever `std::function` is.** It is a C++26 facility requiring a very recent toolchain (GCC16, per the introduction above). Code that must still build with C++20/23 compilers cannot use it yet — `std::function` remains the portable, if less precise, choice until then.
+
 
 Sources:
 
