@@ -1,6 +1,6 @@
 # Common Misuses: How *Not* to Use Standard HOFs, Ranges, and Views
 
-Every construct in the notes above has a companion way to get it wrong. Some fail loudly at compile time, some fail silently at runtime, and a few compile clean, run clean, and just give the wrong answer. This page catalogs the ones worth knowing on purpose, organized the same three ways as the notes above — the classical HOF/iterator-pair model, the constrained ranges algorithms and sentinels, then views — using the same aliases (`namespace rg = std::ranges;` `namespace rv = std::ranges::views;`). Each entry pairs the mistake with the fix; a quick-reference table sits at the end.
+Every construct in the notes above has a companion way to get it wrong. Some fail loudly at compile time, some fail silently at runtime, and a few compile clean, run clean, and just give the wrong answer. This page catalogs the ones worth knowing on purpose, organized the same three ways as the notes above — the classical HOF/iterator-pair model, the constrained ranges algorithms and sentinels, then views — using the same aliases (`namespace rg = std::ranges;` `namespace rv = std::ranges::views;`). Each entry pairs the mistake with the fix and an explanation of the mechanism behind that fix; a quick-reference table sits at the end.
 
 ## 1. Misusing classical HOFs & the iterator-pair model
 
@@ -18,6 +18,8 @@ Both iterators happen to share a type, so this compiles without complaint. `a.be
 auto it = std::find(b.begin(), b.end(), 20);   // one container, start to finish
 ```
 
+**Why it works:** An iterator pair is not two independent iterators — it is a single object's promise that repeatedly incrementing `first` reaches `last` in a bounded number of steps. That promise only holds when both come from the same underlying sequence; nothing in an iterator's type encodes which container produced it, so there is no way for the type system to reject the mismatch. The discipline that actually prevents this bug is naming a single container per algorithm call and reading both arguments off the same object, rather than assembling the pair from separately-computed expressions.
+
 ### 1.2 Handing an algorithm the wrong iterator category
 
 ```cpp
@@ -30,6 +32,8 @@ std::sort(lst.begin(), lst.end());
 ```cpp
 lst.sort();   // std::list has its own member sort() for exactly this reason
 ```
+
+**Why it works:** `std::list<T>` stores nodes as a doubly linked list, so nothing about its memory layout ever allows an iterator to jump `k` positions in O(1) — the requirement `std::sort` depends on for its partitioning and swapping is structurally unmeetable, not merely unimplemented. The library's response is to give the container its own `sort()`, implemented by relinking nodes rather than swapping through random access, meeting the same O(n log n) guarantee without ever needing random access. The general lesson: when `<algorithm>` rejects a container, checking whether the container ships a member function of the same name is worth doing first — `list::merge`, `list::remove`, and `list::unique` exist for this same structural reason.
 
 ### 1.3 Seeding `accumulate` with the wrong type
 
@@ -47,6 +51,8 @@ double total = std::accumulate(prices.begin(), prices.end(), 0);
 double total = std::accumulate(prices.begin(), prices.end(), 0.0);   // 28.81
 ```
 
+**Why it works:** `accumulate`'s return type and the type of its running total are both deduced from the initial value's type, not from the range's `value_type`. Passing `0.0` makes every intermediate sum a `double`, so each addition happens at full precision before the next one is folded in. Passing `0` commits every intermediate sum to `int` arithmetic instead — each `double` element is truncated on the way in, and that loss is permanent by the time the final `int`-to-`double` conversion happens on return. The pattern generalizes beyond this one algorithm: whenever a seed's type differs from a range's element type, the seed's type is what the whole computation runs in.
+
 ### 1.4 A comparator that isn't a *strict* weak ordering
 
 ```cpp
@@ -59,6 +65,8 @@ std::sort(v.begin(), v.end(), [](int a, int b) { return a <= b; });
 ```cpp
 std::sort(v.begin(), v.end(), [](int a, int b) { return a < b; });
 ```
+
+**Why it works:** A strict weak ordering requires `comp(x, x)` to be `false` for every `x`, along with asymmetry and transitivity of both the ordering and its induced equivalence. `<=` violates the first of these outright, since `comp(x, x)` evaluates to `true`. Comparison-based algorithms like `sort` rely on that contract internally — partitioning schemes assume an element is never "less than" itself — so a violation does not produce a cleanly wrong-but-predictable answer; it produces undefined behavior, which in practice ranges from a subtly mis-ordered result to out-of-bounds reads in some implementations. Switching to `<` restores irreflexivity and the rest of the contract along with it.
 
 ### 1.5 Expecting `unique` to remove *all* duplicates
 
@@ -75,6 +83,8 @@ std::sort(v.begin(), v.end());                       // {1, 1, 2, 3, 3, 4}
 v.erase(std::unique(v.begin(), v.end()), v.end());    // {1, 2, 3, 4}
 ```
 
+**Why it works:** `unique` is a single forward pass that compares each element only to its immediate predecessor — it has no memory of anything seen earlier than the previous position, so it cannot recognize two equal elements separated by something different as duplicates of each other. Sorting first moves every occurrence of a given value into one contiguous run, exactly the shape `unique` is built to collapse. This two-step pattern — sort to establish adjacency, then a single adjacency-based pass — recurs throughout the standard library wherever an algorithm is documented as looking only at neighbors.
+
 ## 2. Misusing ranges & sentinels
 
 ### 2.1 Assuming `std::ranges::` "fixes" an algorithm's requirements
@@ -89,6 +99,8 @@ Still a compile error. `rg::sort` needs `random_access_range`, exactly like clas
 ```cpp
 lst.sort();
 ```
+
+**Why it works:** Constrained algorithms check the same structural requirements as their classical counterparts — `ranges::sort` still needs `random_access_range` for the identical reason `std::sort` needed random-access iterators. What changed is where the check happens and how it reports failure: a concept is evaluated directly against the argument type at the call site, so the compiler names the unmet concept (`random_access_range`) instead of failing deep inside the algorithm's template instantiation. The fix is the same fix as 1.2 for the same underlying reason; ranges syntax produces a better error message, not a workaround.
 
 ### 2.2 Throwing away what `remove_if` gives back
 
@@ -105,6 +117,8 @@ auto junk = rg::remove_if(v, [](int x) { return x % 2 == 0; });
 v.erase(junk.begin(), junk.end());   // v is {1, 3, 5}
 ```
 
+**Why it works:** `remove_if` only has an iterator pair to work with — it was never handed the container itself, so it has no way to call `erase` on anything. What it does is shift every element that should survive toward the front and leave the tail in an unspecified, but valid-to-erase, state, then return an iterator marking where that tail begins. That return value is not a diagnostic or a convenience — it is the only record of where the shuffled junk starts, so discarding it does not undo the shuffle; it just makes the result of the shuffle inaccessible. The erase-remove idiom is exactly this: capture the returned iterator, then call the container's own `erase` with it.
+
 ### 2.3 Trying to use the result of a dangling call
 
 ```cpp
@@ -120,6 +134,8 @@ auto v = make();
 auto it = rg::find(v, 8);
 std::cout << *it;   // 8
 ```
+
+**Why it works:** `find`'s range parameter accepts the argument as passed, and when the argument is an rvalue supplied directly — the return value of `make()` — the algorithm cannot guarantee the temporary survives past the end of the full expression. `vector` does not model `borrowed_range` because it owns its storage; there is no way to keep referring to its elements once the vector itself is destroyed. The result type becomes `ranges::dangling`, a type deliberately missing `operator*`, so the danger surfaces as a compile error rather than a runtime one. Naming the vector — `auto v = make();` — turns the temporary into a named object with its own lifetime, one the found iterator can safely outlive within.
 
 ### 2.4 Trusting `dangling` to catch every lifetime bug
 
@@ -147,6 +163,8 @@ auto get_first_even() {
 }
 ```
 
+**Why it works:** The `dangling` guard is a single, narrow rule: it fires only when the range argument is an rvalue passed directly into the call. A named local variable, no matter how soon it's destroyed, is an lvalue by the language's grammar, and an lvalue reference always counts as "the caller's responsibility" for this check — the library has no way to see that the object is about to go out of scope in the caller's own function. Fixing this requires stepping outside what the type system can catch: not returning a reference or iterator into something local at all. Returning `std::optional<T>` copies the value out while it's still valid, so nothing depends on the container's lifetime after the function returns.
+
 ### 2.5 A sentinel that never says "stop"
 
 ```cpp
@@ -165,6 +183,8 @@ A sentinel's entire contract is answering "is this the end?" correctly. Get that
 ```cpp
 auto good = rg::subrange(v.begin(), v.end());   // compares against a real end
 ```
+
+**Why it works:** Every loop bounded by a sentinel — range-based `for`, `ranges::for_each`, the classical `first != last` check — has exactly one way to know when to stop: evaluating `iterator == sentinel` and trusting the answer. There is no secondary bounds check anywhere in the machinery; the sentinel's `operator==` *is* the entire contract. A sentinel that always returns `false` for equality removes that one safeguard completely, so the loop keeps incrementing past the container's actual storage with nothing left to catch it. The fix isn't really about `subrange` specifically — a sentinel's equality operator must genuinely reflect "has the end been reached," every time, for every value it's compared against.
 
 ## 3. Misusing views
 
@@ -186,6 +206,8 @@ The notes above already state the rule: changing whether an already-visited elem
 for (int& x : evens) x = 100;   // still even: membership unchanged, safe to keep using `evens`
 ```
 
+**Why it works:** `filter_view::begin()` caches the position of the first element satisfying the predicate the first time it's called, specifically so that repeated iteration over the same view doesn't re-scan from the start each time. That caching is only sound if predicate membership stays fixed after it's been evaluated — the standard states this as an explicit precondition, not an implementation detail. Mutating an already-visited element so it no longer satisfies the predicate leaves the cached position pointing at something the view no longer believes should be there, and nothing re-validates that cache before the next traversal. Mutating in a way that never changes which elements pass the predicate — as in `x = 100` for an evenness filter — leaves the cache consistent with reality, so it stays safe.
+
 ### 3.2 Passing a view by `const&`
 
 ```cpp
@@ -205,6 +227,8 @@ void print_all(auto r) {                 // views are O(1) to copy — that's th
 }
 ```
 
+**Why it works:** `filter_view` needs to write to its cached-begin-position on first access, which means `begin()` cannot be a `const` member function — writing through a `const` object isn't allowed. Because `range` requires `begin()` to be callable on the object as given, a `filter_view` accessed through `T const&` doesn't satisfy `range` at all, and the function template fails to instantiate. Views are explicitly designed to be cheap to copy — that's the entire reason they don't own their data — so passing by value (or `auto` in a template) isn't a performance concession the way it would be for a container; it's the intended usage pattern.
+
 ### 3.3 Assuming `zip` pads instead of truncates
 
 ```cpp
@@ -223,6 +247,8 @@ if (names.size() != scores.size())
     throw std::runtime_error("length mismatch");
 ```
 
+**Why it works:** `zip_view`'s `size()` (and its `end()`) is defined as the minimum of every underlying range's size, precisely so it never has to invent or default-construct a value for a range that ran out early. That means truncation isn't a bug in `zip` — it's the documented behavior — which is exactly why nothing about it looks like an error: no exception, no partial-and-obviously-wrong output, just a shorter result than expected. Anywhere a length mismatch would be a logic error rather than a legitimate scenario, that check has to happen before the `zip`, since `zip` itself will never surface it.
+
 ### 3.4 Treating a `split` token like a string
 
 ```cpp
@@ -240,6 +266,8 @@ for (auto token : csv | rv::split(',')) {
 }
 ```
 
+**Why it works:** A token from `split` (or `lazy_split`) is a `subrange` — an iterator/sentinel pair delimiting a piece of the source — not an owned or even necessarily contiguous sequence of characters. `stoi` requires a `std::string` or something convertible to `const char*`, and a `subrange` provides neither; there's no overload for it to bind to, hence the compile failure rather than a wrong runtime answer. Explicitly constructing a `string_view` from the token's `begin()`/`end()` — or, for `split`'s forward-range tokens in C++23, direct `string_view{token}` construction, since those tokens satisfy `contiguous_range` and `sized_range` — bridges from "a window into the source" to a type the rest of the standard library already knows how to consume.
+
 ### 3.5 Iterating a `lazy_split` result more than once
 
 ```cpp
@@ -253,6 +281,8 @@ The notes above call out that `lazy_split` targets input ranges that can't be re
 ```cpp
 for (auto tok : tokens) { /* validate and process in the same pass */ }
 ```
+
+**Why it works:** `lazy_split`'s restriction traces back to the underlying range's category, not to anything `lazy_split` does internally — it's built to work over `input_range`s, which by definition can only be read once, forward, with no way to return to an earlier position (a network stream or an `istream_iterator`-backed range, for instance). `split`'s tokens are forward ranges specifically because `split` requires at least a `forward_range` source to begin with, so multiple passes are safe there. The practical check is inspecting what's underneath the adaptor rather than the adaptor's name — a `lazy_split` over a `vector` is perfectly re-iterable, since a `vector` is a forward range regardless of which adaptor sits on top of it.
 
 ### 3.6 Expecting `chunk_by` to behave like `GROUP BY`
 
@@ -268,6 +298,8 @@ auto groups = ids | rv::chunk_by(std::equal_to<>{});
 std::ranges::sort(ids);                                // {1, 1, 1, 2, 2, 3}
 auto groups = ids | rv::chunk_by(std::equal_to<>{});   // {1,1,1} {2,2} {3}
 ```
+
+**Why it works:** `chunk_by` evaluates its predicate only on consecutive pairs — element `i` against element `i+1` — with no broader notion of grouping by value across the whole sequence. Every time the predicate returns `false` for a pair, that's a chunk boundary, so scattered occurrences of the same value produce a new boundary every time something else happens to separate them. Sorting first guarantees that every occurrence of a given value becomes adjacent to every other occurrence of that value, the only shape `chunk_by`'s adjacency-only view can turn into a single group.
 
 ### 3.7 Sprinkling `rv::common` everywhere "just in case"
 
@@ -288,235 +320,28 @@ auto r2 = r | rv::common;
 std::accumulate(r2.begin(), r2.end(), 0);   // classical accumulate needs matching iterator types — here it's earned
 ```
 
+**Why it works:** `common_range` exists to bridge to APIs that specifically require `begin()` and `end()` to return the same type — classical two-iterator-typed function templates like `std::accumulate`, or any code taking a `Container::iterator` by name and comparing it directly. Range-`for` and every `std::ranges::` algorithm are written against the `range` concept, which only requires that `begin()` and `end()` be *comparable*, not identically typed — a sentinel-typed `end()` is already fully usable there. Wrapping in `rv::common` when nothing downstream needs matching types adds a runtime branch on every increment, to decide whether the current position equals the sentinel, for a guarantee nothing is asking for.
+
 ## Quick reference
 
 Most of these come from the same handful of blind spots: assuming a compile-time check exists where it doesn't (1.1, 2.1, 2.4), discarding a return value that was the entire point of the call (2.2), forgetting that a lazy view caches state across separate iterations (3.1, 3.2), and treating a documented contract — strict weak ordering, adjacency-only dedup, shortest-wins `zip`, subrange tokens — as a suggestion instead of a requirement (1.3, 1.4, 2.5, 3.3, 3.4, 3.6).
 
-| # | Mistake | What actually happens | Fix |
-|---|---------|------------------------|-----|
-| 1.1 | Mixing iterators from two containers | UB, no compile error | Use one container's `begin`/`end` |
-| 1.2 | `std::sort` on a `std::list` | Deep template compile error | `lst.sort()` |
-| 1.3 | `accumulate` seeded with `0` on `double` data | Silent truncation to `int` | Seed with `0.0` |
-| 1.4 | `<=` as a sort comparator | UB — violates strict weak ordering | Use `<` |
-| 1.5 | `unique` without sorting first | Non-adjacent duplicates survive | Sort, then `unique` |
-| 2.1 | `rg::sort` on a `std::list` | Same compile error, clearer message | `lst.sort()` |
-| 2.2 | Ignoring `remove_if`'s return value | Container left unchanged | Capture it, `erase()` the subrange |
-| 2.3 | Dereferencing a `dangling` result | Compile error, by design | Name the range first |
-| 2.4 | Assuming `dangling` catches all lifetime bugs | UB, no compile error | Don't return iterators into locals |
-| 2.5 | A sentinel that never matches | Reads past the end — UB | Make the sentinel's condition real |
-| 3.1 | Changing filtered-membership, then reusing the view | UB | Don't change predicate membership mid-use |
-| 3.2 | Passing a `filter_view` by `const&` | Compile error | Take views by value |
-| 3.3 | Expecting `zip` to pad short ranges | Silent truncation to the shortest | Check lengths first |
-| 3.4 | Passing a `split` token to `stoi` | Compile error | Build a `string_view`/`string` from it first |
-| 3.5 | Iterating a single-pass `lazy_split` twice | UB on the second pass | Do everything in one pass |
-| 3.6 | `chunk_by` on unsorted data, expecting `GROUP BY` | Many tiny groups | Sort by the key first |
-| 3.7 | `rv::common` used out of habit | Unnecessary runtime overhead | Apply only at a real iterator-pair boundary |
-
----
-
-# Things to remember
-
-When working with **higher-order functions** in **C++**—such as STL algorithms like `std::transform`, `std::for_each`, `std::accumulate`, and more—it's important to keep several **key concepts** in mind to ensure efficient, correct, and safe usage. Below are the **key things to remember** when using these functions in C++.
-
-
-### 1. **Destination Range Requirements**
-
-* Many STL algorithms like `std::copy_if`, `std::transform`, `std::remove_if`, etc., **modify** or **populate** the destination range, but they do not **resize** the destination container.
-* **Key Point**: Always ensure that the destination container is **large enough** to hold the results or use an **inserter** like `std::back_inserter` to automatically handle resizing.
-
-  ```cpp
-  std::vector<int> output;
-  std::copy_if(input.begin(), input.end(), std::back_inserter(output), [](int x) { return x > 0; });
-  ```
-
-
-
-### 2. **Lambdas and Return Values**
-
-* When using **lambdas** inside algorithms like `std::transform`, `std::accumulate`, or `std::for_each`, make sure that the lambda **returns a value** if you expect the transformation to happen.
-* **Key Point**: Lambdas without a return statement will cause incorrect behavior.
-
-  ```cpp
-  std::transform(vec.begin(), vec.end(), vec.begin(), [](int x) { return x * 2; }); // Correct
-  ```
-
-
-
-### 3. **Initial Value in `std::accumulate`**
-
-* The **initial value** provided to `std::accumulate` is important. Using an incorrect initial value can lead to **incorrect results**.
-* **Key Point**:
-
-  * Use `0` for **addition** (sum).
-  * Use `1` for **multiplication** (product).
-  * Example:
-
-    ```cpp
-    int sum = std::accumulate(nums.begin(), nums.end(), 0); // Correct for sum
-    int product = std::accumulate(nums.begin(), nums.end(), 1, std::multiplies<int>()); // Correct for product
-    ```
-
-
-
-### 4. **Iterator Validity**
-
-* Some algorithms like `std::remove` and `std::erase` **invalidate iterators** when elements are removed from the container, so be careful when working with iterators after modifying containers.
-* **Key Point**: After calling algorithms that modify containers, **recalculate iterators** if necessary.
-
-  ```cpp
-  auto it = std::remove(vec.begin(), vec.end(), 5);
-  vec.erase(it, vec.end()); // Correct
-  ```
-
-
-
-### 5. **Side Effects in Predicates or Functions**
-
-* **Predicates** (functions passed to algorithms like `std::find_if` or `std::remove_if`) should be **side-effect-free** to avoid **unexpected results**.
-* **Key Point**: Avoid modifying the container or global state within the predicate.
-
-  ```cpp
-  // Side-effect free predicate
-  auto isEven = [](int x) { return x % 2 == 0; };
-  ```
-
-
-
-### 6. **Avoiding Uninitialized Destination Containers**
-
-* Algorithms like `std::transform`, `std::copy_if`, and others will **not resize** the destination container. Always ensure that the destination container has **sufficient capacity**.
-* **Key Point**: Use `std::back_inserter` for automatic resizing when the destination container is empty or has unknown size.
-
-  ```cpp
-  std::vector<int> result;
-  std::transform(vec.begin(), vec.end(), std::back_inserter(result), [](int x) { return x * 2; });
-  ```
-
-
-
-### 7. **Range-Based Algorithms in C++20 (`std::ranges`)**
-
-* **C++20** introduced **ranges** and **range adaptors** (`std::ranges::view`, `std::ranges::transform`, `std::ranges::filter`, etc.) that allow for more **elegant and efficient** manipulation of sequences.
-* **Key Point**: You can use **lazy evaluation** with ranges, meaning computations are done only when needed, and no intermediate containers are created.
-
-  ```cpp
-  #include <ranges>
-  auto result = nums | std::views::transform([](int x) { return x * 2; }) | std::views::filter([](int x) { return x > 10; });
-  ```
-
-
-
-### 8. **`std::for_each` and Side Effects**
-
-* `std::for_each` applies a function to each element in a container, but **it doesn’t return a value**. It’s typically used for **side effects**, like modifying elements in-place or printing values.
-* **Key Point**: Be mindful that `std::for_each` does **not modify** the container or return a modified version.
-
-  ```cpp
-  std::for_each(vec.begin(), vec.end(), [](int& x) { x += 5; }); // Modify elements in-place
-  ```
-
-
-
-### 9. **Use of `std::find_if` and `std::count_if`**
-
-* Functions like `std::find_if` and `std::count_if` are useful for **searching** or **counting** elements that match a condition, but their **return types** can be tricky to understand.
-* **Key Point**: `std::find_if` returns an **iterator** to the first matching element, while `std::count_if` returns the **count** of elements that satisfy the predicate.
-
-  ```cpp
-  auto it = std::find_if(vec.begin(), vec.end(), [](int x) { return x > 10; });
-  int count = std::count_if(vec.begin(), vec.end(), [](int x) { return x % 2 == 0; });
-  ```
-
-
-
-### 10. **`std::remove_if` and Erase-Remove Idiom**
-
-* The **Erase-Remove Idiom** is a common pattern in C++ where you **remove** elements from a container and then **erase** them.
-* **Key Point**: `std::remove_if` moves the elements that **don’t match** to the front of the container, but it doesn’t change the container’s size. After calling `std::remove_if`, you should call `erase` to remove the unwanted elements.
-
-  ```cpp
-  auto it = std::remove_if(vec.begin(), vec.end(), [](int x) { return x < 0; });
-  vec.erase(it, vec.end()); // Correctly erases elements after removal
-  ```
-
-
-
-### 11. **Execution Policies (C++17 and Beyond)**
-
-* In **C++17**, you can use **execution policies** with certain algorithms (like `std::for_each`, `std::transform`) to enable **parallel execution** and optimize performance for large datasets.
-* **Key Point**: Use `std::execution::par` or `std::execution::seq` to specify parallel or sequential execution.
-
-  ```cpp
-  #include <execution>
-  std::for_each(std::execution::par, vec.begin(), vec.end(), [](int& x) { x *= 2; });
-  ```
-
-
-
-### 12. **Avoiding Redundant Operations**
-
-* Many algorithms, especially ones like `std::transform`, `std::copy_if`, and `std::for_each`, can lead to **redundant operations** if called repeatedly on the same data.
-* **Key Point**: Combine multiple operations when possible, especially when filtering and transforming data. For example, instead of transforming then filtering, you can filter and transform in one pass.
-
-  ```cpp
-  std::transform(vec.begin(), vec.end(), vec.begin(), [](int x) { return (x > 0) ? x * 2 : x; });
-  ```
-
-
-
-### 13. **Use of `std::any_of`, `std::all_of`, `std::none_of`**
-
-* These functions check conditions on **all**, **any**, or **none** of the elements in a range. They're useful for making conditional decisions based on the contents of a container.
-* **Key Point**: Use these for **short-circuiting** when you only need a true/false result based on the condition.
-
-  ```cpp
-  bool anyEven = std::any_of(vec.begin(), vec.end(), [](int x) { return x % 2 == 0; });
-  bool allPositive = std::all_of(vec.begin(), vec.end(), [](int x) { return x > 0; });
-  ```
-
-
-
-### 14. **Control parameters**
-The execution policy and the seed values act as control parameters that defines how and from what starting point the operation is executed.
-Execution policy controls:
-* Threading (Whether the algorithm runs on one core or many cores)
-* Ordering (Whether the elements are processed in a predictable order)
-* Vectorization (Whether the CPU combines multiple operations into one hardware SIMD instruction)
-* Determinism (Whether results are strictly predictable or allowed to vary slightly for speed)
-
-It decides:
-“How aggressively and in what manner should this computation run?”
-
-Seed controls:
-* Initial state (The very first value used in the computation)
-* Algebraic identity (The mathematical identity element of the operation, e.g., 0 for addition, 1 for multiplication)
-* Result type (The data type of the final result, e.g., char, int, double, etc.)
-* Precision (How accurate the final answer can be)
-* State structure (What kind of object holds the intermediate state)
-
-It decides:
-“What is the starting point and what kind of result are we building?”
-
-**Key Point**: By changing these 2 parameters, we can completely change:
-* performance
-* threading behavior
-* ordering guarantees
-* result type
-* precision
-* shape of the final result
-
-
-
-### TL;DR: Key Things to Remember
-
-* Use `std::back_inserter` for destination ranges in algorithms.
-* Always ensure lambdas **return values** when used in transformation algorithms.
-* Be mindful of iterator validity when modifying containers.
-* Prefer **side-effect free** predicates.
-* **Execution policies** allow parallel execution (Since C++17).
-* Use **ranges** for elegant and efficient transformations (Since C++20).
-* Use **Erase-Remove Idiom** for removing elements from containers.
-
-By keeping these principles in mind, you can write more **efficient**, **robust**, and **maintainable code** using C++ standard higher-order functions.
-
-Source: ChatGPT
+| # | Mistake | What actually happens | Fix | Root mechanism |
+|---|---------|------------------------|-----|-----------------|
+| 1.1 | Mixing iterators from two containers | UB, no compile error | Use one container's `begin`/`end` | Iterator types carry no record of origin |
+| 1.2 | `std::sort` on a `std::list` | Deep template compile error | `lst.sort()` | Linked-list layout can't give O(1) random access |
+| 1.3 | `accumulate` seeded with `0` on `double` data | Silent truncation to `int` | Seed with `0.0` | Running total's type comes from the seed, not the range |
+| 1.4 | `<=` as a sort comparator | UB — violates strict weak ordering | Use `<` | `comp(x, x)` must be `false`; `<=` breaks that |
+| 1.5 | `unique` without sorting first | Non-adjacent duplicates survive | Sort, then `unique` | `unique` only compares to the immediate predecessor |
+| 2.1 | `rg::sort` on a `std::list` | Same compile error, clearer message | `lst.sort()` | Same concept check, reported at the call site |
+| 2.2 | Ignoring `remove_if`'s return value | Container left unchanged | Capture it, `erase()` the subrange | The return value is the only record of where junk starts |
+| 2.3 | Dereferencing a `dangling` result | Compile error, by design | Name the range first | Rvalue range arguments aren't borrowed-range safe |
+| 2.4 | Assuming `dangling` catches all lifetime bugs | UB, no compile error | Don't return iterators into locals | Named locals are lvalues; the guard only checks value category |
+| 2.5 | A sentinel that never matches | Reads past the end — UB | Make the sentinel's condition real | `==` against the sentinel is the only stop condition that exists |
+| 3.1 | Changing filtered-membership, then reusing the view | UB | Don't change predicate membership mid-use | `begin()`'s cached position assumes membership is fixed |
+| 3.2 | Passing a `filter_view` by `const&` | Compile error | Take views by value | Caching in `begin()` requires a non-`const` call |
+| 3.3 | Expecting `zip` to pad short ranges | Silent truncation to the shortest | Check lengths first | `zip_view::size()` is defined as the minimum |
+| 3.4 | Passing a `split` token to `stoi` | Compile error | Build a `string_view`/`string` from it first | A token is a subrange, not an owned string type |
+| 3.5 | Iterating a single-pass `lazy_split` twice | UB on the second pass | Do everything in one pass | Restriction belongs to the input-range source, not the adaptor |
+| 3.6 | `chunk_by` on unsorted data, expecting `GROUP BY` | Many tiny groups | Sort by the key first | Predicate only ever compares adjacent pairs |
+| 3.7 | `rv::common` used out of habit | Unnecessary runtime overhead | Apply only at a real iterator-pair boundary | `range` only needs comparable `begin`/`end`, not matching types |
