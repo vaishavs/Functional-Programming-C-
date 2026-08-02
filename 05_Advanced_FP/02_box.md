@@ -19,7 +19,7 @@ The "box" analogy is a very effective way to understand functional programming p
 
 [![diagram-0-box-model.jpg](https://i.postimg.cc/k5Xr9mWY/diagram-0-box-model.jpg)](https://postimg.cc/zyM2S4tT)
 
-# The Mechanisms
+## The Mechanisms
 Often, it is needed to work on values that come wrapped in some kind of context. The naive way to work with such values is to unwrap them, do the computation, and rewrap. But that is tedious and it forces the programmer to handle the wrapper's meaning by hand every single time (checking for absence, propagating errors, looping over elements). In order to address this, there are 3 mechanisms in C++, each with increasing complexity:
 
 ### 1. Functor
@@ -70,7 +70,7 @@ Sometimes, it cannot be decide what the next computation even is until the value
 
 When a monad runs a function, that function receives the actual value from the *previous* step, and it gets to decide—based on that value—what to do next. The plan is **not** fixed ahead of time anymore; it unfolds as the values come through. Also, every monad is an applicative (and therefore a functor).
 
-# Overall picture
+## Overall picture
 The cleanest way to keep them straight is by the kind of function that is being applied.
 * Functor: value in, value out, with internal box handling; changes what's in the box
 * Applicative: the function is itself in a box, which is what combines several boxed inputs; no dependency between steps
@@ -97,7 +97,7 @@ Each rung includes the powers of the one above and adds more. Every monad is an 
             (each level contains the one before it)
 ```
 
-To get a mathematical background on the box model, watch [this playlist](https://www.youtube.com/playlist?list=PLcoadSpY7rHXJWbUkjQ3P9MXBbXxLP8kV).
+To get a mathematical background on the box model mechanisms, watch [this playlist](https://www.youtube.com/playlist?list=PLcoadSpY7rHXJWbUkjQ3P9MXBbXxLP8kV).
 
 Sources:
 * [C++ Ranges are Pure Monadic Goodness](https://bartoszmilewski.com/2014/10/17/c-ranges-are-pure-monadic-goodness/)
