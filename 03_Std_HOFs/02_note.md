@@ -2,6 +2,8 @@
 
 Every construct in the notes above has a companion way to get it wrong. Some fail loudly at compile time, some fail silently at runtime, and a few compile clean, run clean, and just give the wrong answer. This page catalogs the ones worth knowing on purpose, organized the same three ways as the notes above — the classical HOF/iterator-pair model, the constrained ranges algorithms and sentinels, then views — using the same aliases (`namespace rg = std::ranges;` `namespace rv = std::ranges::views;`). Each entry pairs the mistake with the fix and an explanation of the mechanism behind that fix; a quick-reference table sits at the end.
 
+---
+
 ## 1. Misusing classical HOFs & the iterator-pair model
 
 ### 1.1 Mixing iterators from two different containers
@@ -84,6 +86,8 @@ v.erase(std::unique(v.begin(), v.end()), v.end());    // {1, 2, 3, 4}
 ```
 
 **Why it works:** `unique` is a single forward pass that compares each element only to its immediate predecessor — it has no memory of anything seen earlier than the previous position, so it cannot recognize two equal elements separated by something different as duplicates of each other. Sorting first moves every occurrence of a given value into one contiguous run, exactly the shape `unique` is built to collapse. This two-step pattern — sort to establish adjacency, then a single adjacency-based pass — recurs throughout the standard library wherever an algorithm is documented as looking only at neighbors.
+
+---
 
 ## 2. Misusing ranges & sentinels
 
@@ -185,6 +189,8 @@ auto good = rg::subrange(v.begin(), v.end());   // compares against a real end
 ```
 
 **Why it works:** Every loop bounded by a sentinel — range-based `for`, `ranges::for_each`, the classical `first != last` check — has exactly one way to know when to stop: evaluating `iterator == sentinel` and trusting the answer. There is no secondary bounds check anywhere in the machinery; the sentinel's `operator==` *is* the entire contract. A sentinel that always returns `false` for equality removes that one safeguard completely, so the loop keeps incrementing past the container's actual storage with nothing left to catch it. The fix isn't really about `subrange` specifically — a sentinel's equality operator must genuinely reflect "has the end been reached," every time, for every value it's compared against.
+
+---
 
 ## 3. Misusing views
 
