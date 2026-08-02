@@ -17,7 +17,7 @@
 // writing it gives a COMPILE error naming range_mutable_iterator rather than a
 // failed assertion. PART 3's tests also need PART 1 done.
 //
-//   Build : g++ -std=c++17 -Wall -Wextra -o brange boost_range_extension_exercise.cpp
+//   Build : g++ -std=c++17 -Wall -Wextra -o brange try_04.cpp
 //   Run   : ./brange
 //   Needs Boost headers only (tested with Boost 1.83): apt install libboost-dev
 // =============================================================================
