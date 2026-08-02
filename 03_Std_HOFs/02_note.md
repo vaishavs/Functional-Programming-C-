@@ -1,4 +1,4 @@
-# Common Misuses: How *Not* to Use Standard HOFs, Ranges, and Views
+# How *Not* to Use Standard HOFs, Ranges, and Views
 
 Every construct in the notes above has a companion way to get it wrong. Some fail loudly at compile time, some fail silently at runtime, and a few compile clean, run clean, and just give the wrong answer. This page catalogs the ones worth knowing on purpose, organized the same three ways as the notes above — the classical HOF/iterator-pair model, the constrained ranges algorithms and sentinels, then views — using the same aliases (`namespace rg = std::ranges;` `namespace rv = std::ranges::views;`). Each entry pairs the mistake with the fix and an explanation of the mechanism behind that fix; a quick-reference table sits at the end.
 
