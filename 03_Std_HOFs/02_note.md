@@ -321,27 +321,3 @@ std::accumulate(r2.begin(), r2.end(), 0);   // classical accumulate needs matchi
 ```
 
 **Why it works:** `common_range` exists to bridge to APIs that specifically require `begin()` and `end()` to return the same type — classical two-iterator-typed function templates like `std::accumulate`, or any code taking a `Container::iterator` by name and comparing it directly. Range-`for` and every `std::ranges::` algorithm are written against the `range` concept, which only requires that `begin()` and `end()` be *comparable*, not identically typed — a sentinel-typed `end()` is already fully usable there. Wrapping in `rv::common` when nothing downstream needs matching types adds a runtime branch on every increment, to decide whether the current position equals the sentinel, for a guarantee nothing is asking for.
-
-## Quick reference
-
-Most of these come from the same handful of blind spots: assuming a compile-time check exists where it doesn't (1.1, 2.1, 2.4), discarding a return value that was the entire point of the call (2.2), forgetting that a lazy view caches state across separate iterations (3.1, 3.2), and treating a documented contract — strict weak ordering, adjacency-only dedup, shortest-wins `zip`, subrange tokens — as a suggestion instead of a requirement (1.3, 1.4, 2.5, 3.3, 3.4, 3.6).
-
-| # | Mistake | What actually happens | Fix | Root mechanism |
-|---|---------|------------------------|-----|-----------------|
-| 1.1 | Mixing iterators from two containers | UB, no compile error | Use one container's `begin`/`end` | Iterator types carry no record of origin |
-| 1.2 | `std::sort` on a `std::list` | Deep template compile error | `lst.sort()` | Linked-list layout can't give O(1) random access |
-| 1.3 | `accumulate` seeded with `0` on `double` data | Silent truncation to `int` | Seed with `0.0` | Running total's type comes from the seed, not the range |
-| 1.4 | `<=` as a sort comparator | UB — violates strict weak ordering | Use `<` | `comp(x, x)` must be `false`; `<=` breaks that |
-| 1.5 | `unique` without sorting first | Non-adjacent duplicates survive | Sort, then `unique` | `unique` only compares to the immediate predecessor |
-| 2.1 | `rg::sort` on a `std::list` | Same compile error, clearer message | `lst.sort()` | Same concept check, reported at the call site |
-| 2.2 | Ignoring `remove_if`'s return value | Container left unchanged | Capture it, `erase()` the subrange | The return value is the only record of where junk starts |
-| 2.3 | Dereferencing a `dangling` result | Compile error, by design | Name the range first | Rvalue range arguments aren't borrowed-range safe |
-| 2.4 | Assuming `dangling` catches all lifetime bugs | UB, no compile error | Don't return iterators into locals | Named locals are lvalues; the guard only checks value category |
-| 2.5 | A sentinel that never matches | Reads past the end — UB | Make the sentinel's condition real | `==` against the sentinel is the only stop condition that exists |
-| 3.1 | Changing filtered-membership, then reusing the view | UB | Don't change predicate membership mid-use | `begin()`'s cached position assumes membership is fixed |
-| 3.2 | Passing a `filter_view` by `const&` | Compile error | Take views by value | Caching in `begin()` requires a non-`const` call |
-| 3.3 | Expecting `zip` to pad short ranges | Silent truncation to the shortest | Check lengths first | `zip_view::size()` is defined as the minimum |
-| 3.4 | Passing a `split` token to `stoi` | Compile error | Build a `string_view`/`string` from it first | A token is a subrange, not an owned string type |
-| 3.5 | Iterating a single-pass `lazy_split` twice | UB on the second pass | Do everything in one pass | Restriction belongs to the input-range source, not the adaptor |
-| 3.6 | `chunk_by` on unsorted data, expecting `GROUP BY` | Many tiny groups | Sort by the key first | Predicate only ever compares adjacent pairs |
-| 3.7 | `rv::common` used out of habit | Unnecessary runtime overhead | Apply only at a real iterator-pair boundary | `range` only needs comparable `begin`/`end`, not matching types |
