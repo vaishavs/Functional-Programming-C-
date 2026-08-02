@@ -2,8 +2,7 @@
 // Boost.Range bug-hunting exercise — ANNOTATED EDITION
 // =============================================================================
 // 24 bugs (Bug 0-23) across Boost.Range adaptors and a few classic <algorithm>
-// pitfalls. The CODE is exactly as originally written — every bug still there,
-// unfixed, on purpose. Each note gives the rule broken, the consequence
+// pitfalls. Each note gives the rule broken, the consequence of the error
 // (compile error / UB / silent wrong answer), and the fix.
 //
 // Recurring threads:
@@ -40,6 +39,7 @@ int main() {
     //      reference, never one fed INTO an adaptor (Bugs 11, 13);
     //   3. it is const and lazy — stores nothing, recomputes `x * x` per
     //      dereference. That, not a dead pointer, is what breaks Bug 1.
+    //
     // Works by accident of this expression's shape; materialize instead:
     //   boost::range::push_back(squares_v, nums | transformed(f));
     const auto& squares = nums | transformed([](int x) { return x * x; }); // fragile, not literally dangling — see note above
@@ -48,8 +48,8 @@ int main() {
     // `sort` needs a MUTABLE range whose elements it can swap in place, and
     // `squares` offers neither half: it is const (Bug 0), and `transformed`
     // recomputes each value and hands it back BY VALUE, so there is no stored
-    // element anywhere for sort to write into. Expect a wall of template
-    // errors. Fix: push_back into a real vector, then sort that.
+    // element anywhere for sort to write into. 
+    // Fix: push_back into a real vector, then sort that.
     boost::range::sort(squares); // won't compile: const, and the transform result isn't writable
 
     // --- BUG 2 — Adaptor order changes MEANING (silent logic bug) ------------
@@ -107,8 +107,9 @@ int main() {
     // Primary failure: no `dropped` in Boost.Range — <boost/range/adaptors.hpp>
     // has sliced, strided, filtered, transformed, reversed, uniqued and friends,
     // but not this. (It exists in the unrelated Oven library, and as `drop` in
-    // range-v3 / C++20 <ranges> — easy to misattribute.) Unresolved identifier,
-    // so nothing runs. Real tool: `sliced(N, boost::size(rng))`.
+    // range-v3 / C++20 <ranges> — easy to misattribute.) Real tool:
+    // `sliced(N, boost::size(rng))`.
+    //
     // Secondary: the filtered range is EMPTY, so even a working "drop 1" would
     // advance past `end()` (UB) and then dereference it (UB again).
     auto dropped = nums | filtered([](int x) { return x > 100; }) | dropped(1); // `dropped` isn't real Boost.Range, and the filtered range is empty anyway
@@ -126,9 +127,11 @@ int main() {
     // The `const` is a red herring — a const source is exactly what a copy
     // algorithm wants. The real trap is semantic: duplicates are dropped only
     // when immediately next to an equal value, and nothing is sorted first, so
-    // {1, 2, 1, 3, 1} keeps all three 1's. This call can't even show the
-    // failure — `nums` is already sorted and distinct, so it "looks correct" by
-    // accident of the input. Sort first for real de-duplication.
+    // {1, 2, 1, 3, 1} keeps all three 1's. This call can't show the failure
+    // either way: Bug 8's remove_if has already left `nums` as {2, 4, 3, 4, 5},
+    // whose two 4's are NOT adjacent — so nothing is collapsed and the result
+    // "looks correct" by accident of the input. (On the original {1,2,3,4,5} it
+    // is distinct anyway.) Sort first for real de-duplication.
     const auto& const_nums = nums;
     vector<int> unique_vec;
     boost::range::unique_copy(const_nums, back_inserter(unique_vec)); // only strips ADJACENT dupes; nums has none, so this proves nothing
@@ -137,9 +140,14 @@ int main() {
     // It runs the whole idiom internally: `remove_if`, then `.erase()` ON THE
     // ARGUMENT PASSED — so that argument must own its storage.
     // `make_iterator_range(...)` builds a non-owning `iterator_range`: it models
-    // Range (has begin/end) but not Container, so expect "no member named
-    // 'erase'". The Range-vs-Container split recurs in C++20 <ranges> too: a
-    // view can re-window data, only a container can resize it. Use `nums`.
+    // Range (has begin/end) but not Container.
+    // The FIRST error is not the missing erase: remove_erase_if takes its
+    // container by non-const lvalue reference and make_iterator_range returns a
+    // TEMPORARY, so gcc says "cannot bind non-const lvalue reference ... to an
+    // rvalue". Assign the range to a named variable and the intended error
+    // appears: iterator_range "has no member named 'erase'".
+    // The Range-vs-Container split recurs in C++20 <ranges> too: a view can
+    // re-window data, only a container can resize it. Use `nums`.
     boost::range::remove_erase_if(boost::make_iterator_range(nums.begin(), nums.end()),
         [](int x) { return x < 0; }); // iterator_range has no .erase() — it's a view, not a container
 
@@ -174,14 +182,19 @@ int main() {
     };
     auto&& r = make_range(); // dangling before this line even finishes running — no binding style fixes it
 
-    // --- BUG 14 — Writing into a transformed VIEW of an empty vector ---------
-    // `copy` writes into EXISTING slots and never grows anything. `tmp_vec` is
-    // empty, so the view spans zero elements with no room for `nums`'s five —
-    // either a no-op or an out-of-bounds write (UB), since copy is driven by the
-    // SOURCE's length and never learns the destination's size. And even
-    // non-empty, a transformed view is no place to write: there is no reverse
-    // mapping from the assigned value back to the original, unless the function
-    // returns a real writable reference, which `x * x` does not.
+    // --- BUG 14 — copy()'s destination must be an OutputIterator ------------
+    // This is a COMPILE ERROR, not a runtime hazard — "no match for
+    // 'operator*' (operand type is transformed_range<...>)". copy's second
+    // argument must be an OutputIterator (`*out++ = value`), and a range is not
+    // one: Bug 3's mistake with the arguments the other way round.
+    // Both hazards this line was reaching for are therefore unreachable, and
+    // both are still worth knowing: `tmp_vec` is empty, so there is no room for
+    // nums's five elements (copy is driven by the SOURCE's length and never
+    // learns the destination's size); and a transformed view is no meaningful
+    // destination anyway, since there is no reverse mapping from an assigned
+    // value back to the original unless the function returns a real writable
+    // reference, which `x * x` does not.
+    // Fix: boost::range::copy(nums, std::back_inserter(tmp_vec));
     vector<int> tmp_vec;
     boost::range::copy(nums,
         tmp_vec | transformed([](int x) { return x * x; })
@@ -218,18 +231,17 @@ int main() {
     // `squares` was declared `const auto&` (Bug 0), and `decltype` on a name
     // whose declared type is a reference reproduces the reference — so this asks
     // for `vector<T&>`, which containers forbid (they need an Erasable object
-    // type). Expect a deep error bottoming out in `std::allocator<T&>`. Even
+    // type). gcc 13 reports "forming pointer to reference type". Even
     // with a proper value type, N stored views multiply every lifetime hazard
     // above (Bugs 0, 5, 11-13, 20) by N.
     vector<decltype(squares)> vec_of_ranges; // decltype(squares) is a REFERENCE type — vector<T&> doesn't compile
 
-    // --- BUG 19 — std::random_shuffle was removed in C++17 -------------------
-    // Primary failure: deprecated in C++14, REMOVED in C++17 for its reliance on
-    // `std::rand()` (poor quality, not thread-safe, globally seeded), so under a
-    // modern standard <algorithm> doesn't declare the name at all. Replacement:
-    // `std::shuffle(first, last, urbg)` with an explicit generator.
-    // Also, on an older standard, it takes an iterator PAIR, not a range (as in
-    // Bug 15) — and `squares` is const and unswappable anyway (Bugs 0, 1).
+    // --- BUG 19 — std::random_shuffle: wrong argument shape (and removed) ----
+    // The primary failure here is the ARGUMENT SHAPE, not a missing name — "no
+    // matching function for call to 'random_shuffle(const
+    // transformed_range<...>&)'". It takes a PAIR of iterators, not a range
+    // object: Bug 15's mistake against a different algorithm.
+    // The name is still available, but depracated.
     std::random_shuffle(squares); // removed in C++17+, wrong argument shape, and squares isn't mutable/swappable anyway
 
     // --- BUG 20 — reversed over a named lvalue: the Bug 0 story again --------
@@ -246,8 +258,12 @@ int main() {
 
     // --- BUG 21 — Bug 7 again, plus: filtered ranges aren't Sized ------------
     // `dropped` still doesn't exist (Bug 7), so this fails to compile first.
-    // Granting a working "skip N": filtering leaves {2, 4}, and dropping 100
-    // means walking 100 steps through two elements. A filtered range can't
+    // Here the diagnostic IS the intended one — "'dropped' was not declared in
+    // this scope; did you mean 'dropped2'?" — because this line's variable has
+    // a different name, unlike Bug 7's.
+    // Granting a working "skip N": filtering the post-Bug-8 `nums` {2,4,3,4,5}
+    // leaves {2, 4, 4}, and dropping 100 means walking 100 steps through three
+    // elements. A filtered range can't
     // report its length without testing every element — it is not a Sized Range,
     // so there's no O(1) `.size()` to clamp N against, and a naive
     // implementation stepping forward N times runs straight past `end()`: UB the
