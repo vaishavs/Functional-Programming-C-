@@ -59,7 +59,7 @@ INVOKE is specified by cases on the first argument. The standard enumerates seve
           ┌────────────────────────────┼────────────────────────────┐
           │                            │                            │
 ╔═════════▼══════════════╗  ╔══════════▼═════════════╗  ╔═══════════▼════════════╗
-║  GROUP A               ║  ║  GROUP B               ║  ║  GROUP C               ║
+║  GROUP A:              ║  ║  GROUP B:              ║  ║  GROUP C:              ║
 ║  pointer to            ║  ║  pointer to            ║  ║  everything else       ║
 ║  MEMBER FUNCTION       ║  ║  DATA MEMBER           ║  ║                        ║
 ║  R (C::*)(Args...)     ║  ║  T C::*                ║  ║  function              ║
@@ -75,7 +75,7 @@ INVOKE is specified by cases on the first argument. The standard enumerates seve
 
 Groups A and B ask the same three questions about `a1`, in the same order, and they differ only in what each answer produces.
 
-In Group A the entity `f` is a pointer to a member function, and `a1` supplies the object on which that member function runs.
+In Group A, the entity `f` is a pointer to a member function, and `a1` supplies the object on which that member function runs.
 
 | # | Condition on `a1` | The expression evaluates to |
 |:-:|---|---|
@@ -83,7 +83,7 @@ In Group A the entity `f` is a pointer to a member function, and `a1` supplies t
 | 2 | `a1` is a `std::reference_wrapper` | `(a1.get().*f)(a2, ..., aN)` |
 | 3 | `a1` is anything else that can be dereferenced, such as a `T*`, a `unique_ptr`, or a `shared_ptr` | `((*a1).*f)(a2, ..., aN)` |
 
-In Group B the entity `f` is a pointer to a data member, and `N` must be exactly 1, which means no further arguments may be supplied.
+In Group B, the entity `f` is a pointer to a data member, and `N` must be exactly 1, which means no further arguments may be supplied.
 
 | # | Condition on `a1` | The expression evaluates to |
 |:-:|---|---|
@@ -91,7 +91,7 @@ In Group B the entity `f` is a pointer to a data member, and `N` must be exactly
 | 5 | `a1` is a `std::reference_wrapper` | `a1.get().*f` |
 | 6 | `a1` is anything else that can be dereferenced, such as a `T*`, a `unique_ptr`, or a `shared_ptr` | `(*a1).*f` |
 
-In Group C the entity `f` is anything other than a pointer to a member, and no object is involved.
+In Group C, the entity `f` is anything other than a pointer to a member, and no object is involved.
 
 | # | Condition | The expression evaluates to |
 |:-:|---|---|
@@ -175,7 +175,7 @@ In optimized builds `std::invoke` costs nothing at run time, because it exists t
 
 ## `std::invoke_r`
 
-The function template `std::invoke` returns whatever the underlying call returns. The C++23 addition `std::invoke_r<R>` performs the same INVOKE operation and then converts the result to the type `R`.
+The function template `std::invoke` returns whatever the underlying call returns. The C++23 addition, `std::invoke_r<R>`, performs the same INVOKE operation and then converts the result to the type `R`.
 
 ```cpp
 double r = std::invoke_r<double>(add, 3, 2);     // yields 5, converted to double
@@ -187,6 +187,47 @@ The `void` form is the more useful of the two, because it makes the intention to
 ---
 
 ## How `constexpr` and `noexcept` propagate
+Both `constexpr` and `noexcept` were introduced in C++11 (and significantly expanded in later versions) to make C++ code faster, safer, and more expressive. However, they solve entirely different problems: `constexpr` is about **compile-time computation**, while `noexcept` is about **exception safety and optimization**.
+
+The `constexpr` tells the compiler that the value of a variable or the return value of a function **can be evaluated at compile time**. When `constexpr` is applied to a function, it essentially means: *"If compile-time constants are passed into this function, the result should be computed at compile time. Otherwise, it should run normally at runtime"*. It shifts work from runtime to compile time, resulting in faster programs and smaller binaries.
+
+```cpp
+constexpr int square(int x) {
+    return x * x;
+}
+
+int main() {
+    constexpr int a = square(5); // Computed by the compiler (Compile-time)
+    
+    int b = 10;
+    int c = square(b);           // Computed by the CPU (Runtime)
+}
+
+```
+
+The `noexcept` tells the compiler that a function **is guaranteed not to throw an exception**. 
+
+```cpp
+void doSomething() noexcept {
+    // I promise this function will never throw an exception
+}
+
+```
+One of its use cases is that when a function marked with `noexcept` might throw an exception, the compiler need not generate extra "stack unwinding" boilerplate code to safely destroy objects if an error occurs, resulting in smaller and faster binaries. This works only for functions that promise not to throw exceptions in any way. But if such a function throws an exception (or calls a function that throws an unhandled exception), the C++ runtime will immediately call `std::terminate()` and crash the program. You cannot catch an exception that escapes a noexcept function.
+
+In modern C++, `constexpr` and `noexcept` interact directly with `std::invoke` and its associated utilities (`std::invoke_r`, `std::apply`, and the `std::is_invocable` type traits). The `constexpr` enables uniform function invocation at compile time, while `noexcept` enables conditional exception-safety propagation and type-level introspection.
+
+The `std::invoke` itself is declared with a conditional `noexcept` specifier. It is non-throwing if and only if the underlying operation being invoked is non-throwing.
+The implementation behaviour conceptually follows:
+
+```cpp
+template <typename Callable, typename... Args>
+constexpr decltype(auto) invoke(Callable&& f, Args&&... args) 
+    noexcept(std::is_nothrow_invocable_v<Callable, Args...>) {
+    // Invocation logic
+}
+
+```
 
 The function template `std::invoke` is `constexpr`, and it is conditionally `noexcept`. Both of these properties are inherited from the callable that is passed in rather than conferred by `std::invoke` itself.
 
@@ -207,6 +248,10 @@ A common misreading holds that because `std::invoke` is `constexpr`, any call ro
 static_assert(std::invoke(add, 2, 3) == 5);
 // error: call to non-'constexpr' function 'int add(int, int)'
 ```
+For `std::invoke` or `std::apply` to evaluate at compile time, two conditions must be met:
+
+1. The target callable (free function, lambda, member function pointer, or functor) must be executable in a `constexpr` context.
+2. All arguments passed to the callable must be valid constant expressions.
 
 ---
 
@@ -291,68 +336,6 @@ std::invocable<decltype([](int){ return std::string("x"); }), int>;   // true
 ```
 
 Constraining the result requires either `std::is_invocable_r_v` or, where a boolean is wanted, `std::predicate`. The last three concepts in the table differ from one another only in semantic requirements that no compiler can verify, so their role is to document intent, and `std::strict_weak_order` is the one that an ordering parameter should name.
-
----
-
-## Related facilities built on INVOKE
-
-Every facility described below is specified in terms of INVOKE, which is the reason each of them accepts member pointers as readily as it accepts ordinary callables.
-
-### `std::apply`
-
-The function template `std::apply`, added in C++17, calls a callable with the elements of a tuple as its arguments.
-
-```cpp
-#include <tuple>
-auto args = std::make_tuple(6, 7);
-std::apply(add, args);                                          // yields 13
-
-std::apply(&Widget::scale, std::make_tuple(std::ref(w), 2));    // yields 200
-```
-
-The member-pointer form works because `std::apply` unpacks the tuple and hands the resulting elements to INVOKE, where the first of them becomes the object.
-
-### `std::reference_wrapper`
-
-This class template, usually created through `std::ref` or `std::cref`, serves two distinct roles that are often conflated. In the first role it acts as the object argument of a member pointer, where INVOKE unwraps it, as cases 2 and 5 describe. In the second role it acts as a callable in its own right, because a reference wrapper around a callable forwards its own `operator()` to the referent, which allows a large or non-copyable function object to be passed by reference into an interface that would otherwise copy it.
-
-### `std::thread` and `std::async`
-
-Both of these facilities copy their arguments before invoking the callable. This is a deliberate safety measure, and it means that a function taking a reference parameter will not compile unless the sharing is requested explicitly.
-
-```cpp
-void worker(int& counter) { ++counter; }
-
-int counter = 0;
-std::thread bad(worker, counter);
-// error: static assertion failed: std::thread arguments must be invocable
-//        after conversion to rvalues
-
-std::thread good(worker, std::ref(counter));   // the sharing is now explicit
-good.join();                                    // counter holds 1
-```
-
-The diagnostic is unusually clear about its cause. The underlying rule is that arguments are decay-copied and that sharing must be requested, which has the further benefit of making the sharing visible at the call site.
-
-### `std::bind_front`
-
-This C++20 facility fixes the leading arguments of a callable and forwards the rest, producing a new callable. One frequent use is to bind a member function to its object, which works precisely because of the convention that the object comes first.
-
-```cpp
-auto scale_w = std::bind_front(&Widget::scale, std::ref(w));
-scale_w(4);      // yields 40
-```
-
-The mirror-image facility `std::bind_back` was added in C++23 and is not present in g++ 13.3.
-
-### The type-erased wrappers
-
-The class templates `std::function`, `std::move_only_function` from C++23, and `std::packaged_task` all store any Cpp17Callable behind a fixed signature, and all of them perform the call through INVOKE. That is why a pointer to a member function can be stored in a `std::function` whose first parameter is the object.
-
-```cpp
-std::function<int(const Widget&, int)> f = &Widget::scale;
-f(w, 4);         // yields 40
-```
 
 ---
 
