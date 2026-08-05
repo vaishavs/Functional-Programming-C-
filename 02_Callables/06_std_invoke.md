@@ -476,4 +476,4 @@ Sources:
 * https://devblogs.microsoft.com/oldnewthing/20220401-00/?p=106426
 * https://www.rangakrish.com/index.php/2018/10/14/c17-stdapply-and-stdinvoke/
 * https://medium.com/@sireanu.roland/why-should-you-use-noexcept-f095aed9e6c4
-* medium.com/towardsdev/constexpr-part-i-the-engine-of-modern-c-meta-programming-d9896938f8ba
+* https://towardsdev.com/constexpr-part-i-the-engine-of-modern-c-meta-programming-d9896938f8ba
