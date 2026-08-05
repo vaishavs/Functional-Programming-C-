@@ -541,3 +541,9 @@ Each row below states how one spelling treats the four properties that deduction
 2. Parentheses change the answer that `decltype` gives, because `decltype(x)` reports the declared type of an entity whereas `decltype((x))` reports `T&` for any lvalue.
 3. The token `auto&&` denotes a forwarding reference wherever deduction is taking place, and it denotes an rvalue reference only where no deduction occurs.
 4. Whenever the deduced type is in doubt, it should be printed rather than guessed, using the helper given in §0.
+
+Sources:
+
+* https://medium.com/@nubb/c-9-type-deduction-in-c-208c804dd792
+* Effective Modern C++ by Scott Meyers
+* https://www.linkedin.com/pulse/deferred-type-deduction-c-implementing-type-erased-dynamic-gholami-emktf/
