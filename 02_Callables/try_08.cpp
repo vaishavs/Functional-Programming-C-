@@ -22,7 +22,7 @@
 // Flip a step's STEPn_READY to 1 when finished. Steps are cumulative — enable
 // them in order. Ships compiling and running with every step off.
 //
-//   Build : g++ -std=c++17 -Wall -Wextra -o callable callable_entities_todo.cpp
+//   Build : g++ -std=c++17 -Wall -Wextra -o callable try_08.cpp
 //   Run   : ./callable
 //
 // The unifying idea
