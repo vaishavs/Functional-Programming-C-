@@ -10,7 +10,7 @@ The full machinery involves:
 To illustrate this process, let us take a custom adaptor named `add_value` that takes a range of numbers and adds a specific constant to each element lazily as the range is traversed.
 
 #### Step 1: Defining the Underlying Iterator
-Because a range is defined by its iterators, an iterator must be written to wrap the original iterator and modify the behavior when dereferencing occurs. The `boost::iterator_adaptor` is utilized for this purpose. The boilerplate code (incrementing, comparing, etc.) is handled by this utility, so only the `dereference()` method needs to be overridden. (The `boost::iterator_facade` could also be used instead of `boost::iterator_adaptor`, depending on the use case).
+Because a range is defined by its iterators, an iterator must be written to wrap the original iterator and modify the behavior when dereferencing occurs. The `boost::iterator_adaptor` is utilized for this purpose. The boilerplate code (incrementing, comparing, etc.) is handled by this utility, so only the `dereference()` method needs to be overridden. (The `boost::iterator_facade` could also be used instead of `boost::iterator_adaptor`, depending on the use case.)
 
 ```cpp
 #include <boost/iterator/iterator_adaptor.hpp>
