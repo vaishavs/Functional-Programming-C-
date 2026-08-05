@@ -29,10 +29,12 @@ For more sources, refer [this page](https://www.google.com/url?sa=t&rct=j&q=&esr
    iv) Binding function parameters
 
    v) Standard library functors
-   
-   vi) Examples
 
-   vii) Exercises
+   vi) `std::invoke` and its family of functions
+      
+   vii) Examples
+
+   viii) Exercises
 4. Standard Higher-Order Functions
 
    i) Introduction
@@ -43,10 +45,12 @@ For more sources, refer [this page](https://www.google.com/url?sa=t&rct=j&q=&esr
 
    iv) Writing a custom view adaptor
 
-   v) Examples
+   v) Bonus: Dynamic type deduction
 
-   vi) Exercises
-5. Introduction to Boost.Range Library
+   vi) Examples
+
+   vii) Exercises
+6. Introduction to Boost.Range Library
 
    i) Introduction
 
@@ -55,7 +59,7 @@ For more sources, refer [this page](https://www.google.com/url?sa=t&rct=j&q=&esr
    iii) Examples
 
    iv) Exercises
-6. Advanced Functional Programming Techniques
+7. Advanced Functional Programming Techniques
 
    i) Currying and partial application
 
