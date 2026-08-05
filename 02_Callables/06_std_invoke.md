@@ -470,3 +470,10 @@ The first is that the object is always the first argument in both member-pointer
 The second is that a pointer to a data member is callable through INVOKE, and that the resulting case is a read which takes no arguments and yields an lvalue.
 
 The third is that `std::invoke` propagates properties rather than conferring them, so the `constexpr` status, the `noexcept` status, and the return type all come from the callable that was passed in.
+
+Sources:
+
+* https://devblogs.microsoft.com/oldnewthing/20220401-00/?p=106426
+* https://www.rangakrish.com/index.php/2018/10/14/c17-stdapply-and-stdinvoke/
+* https://medium.com/@sireanu.roland/why-should-you-use-noexcept-f095aed9e6c4
+* medium.com/towardsdev/constexpr-part-i-the-engine-of-modern-c-meta-programming-d9896938f8ba
