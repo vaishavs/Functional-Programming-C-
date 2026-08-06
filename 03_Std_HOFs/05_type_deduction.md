@@ -1,4 +1,5 @@
 # Bonus: Type Deduction in C++
+
 Guessing at a deduced type is never necessary, because the compiler can be asked directly. The helper below prints any type as a readable string on GCC and Clang, and it is used throughout this tutorial to turn claims into observations.
 
 ```cpp
@@ -61,7 +62,7 @@ Cutting across those five groups there are only two sets of rules, and knowing w
     decltype  ──────►   keeps    ──────►   the EXACT declared type, references and all
 ```
 
-Almost every surprise in this area reduces to one of the two rule sets being applied where the other was expected. The remainder of the tutorial works through the groups in turn, and §7 collects the failures that follow from confusing them.
+Almost every surprise in this area reduces to one of the two rule sets being applied where the other was expected. The remainder of the tutorial works through the groups in turn, and each group closes with the failures that follow from confusing them.
 
 ---
 
@@ -116,7 +117,7 @@ auto b3 = {1};     // std::initializer_list<int>
 auto b4 = {1, 2};  // std::initializer_list<int>
 ```
 
-The form written with `= {...}` deduces a `std::initializer_list`, whereas a template parameter would never deduce that type from the same argument, as §4.3 demonstrates. Before C++17 the form `auto b2{1}` also produced an `initializer_list`, which is why older books and older advice disagree with the behaviour shown here.
+The form written with `= {...}` deduces a `std::initializer_list`, whereas a template parameter would never deduce that type from the same argument, as the section on non-deduced contexts in Group III demonstrates. Before C++17 the form `auto b2{1}` also produced an `initializer_list`, which is why older books and older advice disagree with the behaviour shown here.
 
 ### `decltype(auto)` variables
 
@@ -125,13 +126,13 @@ The `decltype(auto)` form, introduced in C++14, occupies the same syntactic posi
 ```cpp
 int  gi = 5;
 auto           v1 = gi;    // int   — auto strips, as always
-decltype(auto) v2 = gi;    // int   — the entity rule of §6.1 applies
-decltype(auto) v3 = (gi);  // int&  — the parenthesis rule of §6.1 applies
+decltype(auto) v2 = gi;    // int   — the entity rule described under decltype applies
+decltype(auto) v3 = (gi);  // int&  — the parenthesis rule described under decltype applies
 ```
 
 ### Structured bindings
 
-A structured binding, added in C++17, introduces names for the individual pieces of a tuple, a pair, an array, or a public aggregate. The `auto` that appears in front of the bracketed name list applies to a hidden object rather than to the individual names, and that hidden object is deduced by the rules of §2.1.
+A structured binding, added in C++17, introduces names for the individual pieces of a tuple, a pair, an array, or a public aggregate. The `auto` that appears in front of the bracketed name list applies to a hidden object rather than to the individual names, and that hidden object is deduced by the rules given for `auto` variables above.
 
 ```cpp
 std::pair<int, std::string> ps{1, "x"};
@@ -154,9 +155,11 @@ The customary idiom in a loop is to write `const auto&` when the elements are on
 std::map<std::string, int> m{{"a", 1}};
 for (const auto& [key, value] : m) std::cout << key << "=" << value << "\n";
 ```
+
 ### Common pitfalls
 
-#### A variable declared with `auto` copies silently.
+#### A variable declared with `auto` copies silently
+
 Because `auto` strips references, a function that returns `const T&` yields a fresh `T` when its result is captured with plain `auto`, and in a loop over a container of strings that copy can dominate the run time.
 
 ```cpp
@@ -164,9 +167,18 @@ auto row = matrix.get_row(i);            // a copy is made, however large the ro
 const auto& row2 = matrix.get_row(i);    // no copy is made
 ```
 
-The solution is to choose the form deliberately: `const auto&` when the object is only observed, `auto&` when it is modified, and plain `auto` only when a copy is genuinely wanted.
+**Solution.** The remedy is not to avoid `auto` but to state the intent through the accompanying qualifiers, because each of the three forms answers a different question and none of them is a default that fits every situation. The form `const auto&` is appropriate whenever the object is merely inspected, and it costs nothing even when the initializer happens to be a temporary, because binding a `const` reference to a temporary extends that temporary's lifetime to match the reference. The form `auto&` is appropriate whenever the original object is to be modified through the new name, and it fails to compile when the initializer is not a modifiable lvalue, which is a useful check rather than an obstacle. Plain `auto` is appropriate only when an independent copy is genuinely wanted, for instance because the copy is about to be modified while the original is left untouched, or because the original is about to be destroyed.
 
-#### A variable declared with `auto` can capture a proxy type.
+```cpp
+const auto& observed  = matrix.get_row(0);   // inspection only, and no copy is made
+auto&       to_modify = matrix.row_ref(0);   // the original is to be changed through this name
+auto        owned     = matrix.get_row(0);   // a copy is wanted deliberately
+```
+
+The same three-way choice applies to the loop variable of a range-based `for`, where the consequences are multiplied by the number of elements. That is the reason an unqualified `auto` in a loop over a container of strings or of vectors deserves a second look, even though the same spelling over a container of `int` costs nothing at all.
+
+#### A variable declared with `auto` can capture a proxy type
+
 Some expressions return a proxy object rather than the value they appear to return, and `auto` faithfully deduces the proxy.
 
 ```cpp
@@ -175,36 +187,91 @@ auto p1 = vb[0];          // std::_Bit_reference, which is not bool
 auto p2 = bool(vb[0]);    // bool
 ```
 
-The container `std::vector<bool>` stores bits and therefore returns a proxy, so the deduced variable holds a reference back into the vector; the variable can consequently change meaning later, or dangle if the vector is destroyed. Expression-template libraries such as Eigen and the range views of the standard library behave the same way. The solution is to name the intended type explicitly or to apply a cast, as the second line above does.
+The container `std::vector<bool>` stores bits and therefore returns a proxy, so the deduced variable holds a reference back into the vector; the variable can consequently change meaning later, or dangle if the vector is destroyed.
 
-#### A non-const `auto&` cannot bind to a temporary.
+**Solution.** The remedy has two halves, and only the first of them is a matter of syntax. The first half is to force the intended type at the point of capture, for which three spellings serve equally well: naming the type outright, applying a functional-style conversion, or applying a `static_cast`. All three produce a genuine `bool` that keeps its value when the vector is modified afterwards, whereas a variable holding the proxy would silently change with it.
+
+```cpp
+bool b1 = vb[0];                      // the type is named outright
+auto b2 = bool(vb[0]);                // a functional-style conversion
+auto b3 = static_cast<bool>(vb[0]);   // an explicit cast, which is the most searchable of the three
+
+vb[0] = false;                         // afterwards b1, b2 and b3 all still read true,
+                                       // whereas a variable holding the proxy would read false
+```
+
+The second half is recognising that the question arises at all, since nothing in the source announces a proxy. The libraries that return proxies do so deliberately and tend to say so in their documentation: `std::vector<bool>` packs its elements into bits, expression-template libraries such as Eigen defer evaluation so that a whole expression can be optimised as a unit, and the range views of the standard library are lazy by design. When an element or a subexpression is captured from a library of that kind, printing the deduced type with the helper given at the start settles the matter in one line, and naming the type explicitly is the safer default whenever the answer is not immediately obvious.
+
+#### A non-const `auto&` cannot bind to a temporary
 
 ```cpp
 auto& r = x + 1;
 // error: cannot bind non-const lvalue reference of type 'int&' to an rvalue of type 'int'
 ```
 
-The solution is to write `const auto&`, which extends the lifetime of the temporary, or to write `auto&&`, which binds to either category.
+**Solution.** Two spellings accept a temporary, and the choice between them is a matter of intent rather than of taste. The form `const auto&` binds and extends the temporary's lifetime to that of the reference, and it announces that the result will only be read. The form `auto&&` binds and extends in the same way, and being a forwarding reference it accepts an lvalue just as readily while preserving whether the initializer was modifiable.
 
-#### A declaration of `auto` without an initializer is ill-formed.
+```cpp
+const auto& t1 = gi + 1;   // deduced as const int&, and the temporary lives as long as t1
+auto&&      t2 = gi + 1;   // deduced as int&&, and the temporary likewise lives as long as t2
+```
+
+In ordinary code where a value is simply being examined, `const auto&` is the clearer of the two because it states the restriction. In generic code, where the initializer might be an lvalue on one instantiation and a temporary on another, `auto&&` is the correct default precisely because it covers both without a second spelling. What should be avoided is reaching for plain `auto` merely to make the diagnostic disappear, since that introduces a copy the original code did not ask for and hides the question rather than answering it.
+
+#### A declaration of `auto` without an initializer is ill-formed
 
 ```cpp
 auto x;    // error: declaration of 'auto x' has no initializer
 ```
 
-This follows directly from the definition of the group, since an initializer is the only source of information available. For the same reason, non-static data members cannot be declared with `auto` at all, and only `static constexpr` members may use it.
+**Solution.** The declaration must either be given something to deduce from or must state its type outright. Supplying an initializer is usually the better of the two, because a variable that is declared in one place and assigned in another can be read before it is set, and initialising at the point of declaration removes that possibility entirely.
 
-#### Brace initialisation does not behave uniformly.
-The form `auto x = {1};` deduces `std::initializer_list<int>`, the form `auto x{1};` deduces `int` from C++17 onwards, and a braced list passed to a plain `T` parameter does not deduce at all, as §4.3 shows. The solution is to prefer `=` with an ordinary value for scalars and to be explicit whenever a list is genuinely intended.
+```cpp
+auto x = 0;      // an initializer is supplied, so deduction has something to work from
+int  y;          // the type is stated, and the variable is deliberately left uninitialised
+int  z = 0;      // the type is stated and the value is initialised, which is safer still
+```
 
-## Plain `auto` in a range-based `for` loop over a map copies every element.
+The same reasoning explains a restriction that is otherwise puzzling. A non-static data member cannot be declared with `auto`, because the initializer of a member is not necessarily present in the class body and different constructors may supply different ones, so there would be no single expression to deduce from. Only a `static constexpr` member, whose initializer is fixed and appears in the class body, may use `auto`.
+
+```cpp
+struct S {
+    // auto a = 0;                     // ill-formed: a non-static member cannot use auto
+    int b = 0;                          // the type is written out, as it must be
+    static constexpr auto c = 42;       // permitted, because the initializer is right here
+};
+```
+
+#### Brace initialisation does not behave uniformly
+
+The form `auto x = {1};` deduces `std::initializer_list<int>`, the form `auto x{1};` deduces `int` from C++17 onwards, and a braced list passed to a plain `T` parameter does not deduce at all, as the section on non-deduced contexts in Group III shows.
+
+**Solution.** The safest approach is to make the intent explicit in the spelling rather than to rely on which of several similar-looking forms was written. For a single scalar value the plain `=` form is unambiguous under every standard and does not change meaning between C++11 and C++17. For a genuine list, naming the container removes any question of what was deduced. For a list that really is meant to be an `initializer_list`, saying so in the declaration documents an intention that would otherwise have to be inferred by a reader.
+
+```cpp
+auto scalar = 1;                            // int, under every standard
+std::vector<int> vec{1, 2};                 // a container, named outright
+std::initializer_list<int> list = {1, 2};   // an initializer_list, and evidently so
+```
+
+The reason this matters beyond style is a lifetime question. A deduced `initializer_list` refers to a backing array whose lifetime is tied to the initializer expression, so an `initializer_list` variable that outlives the statement which created it refers to storage that no longer exists. Naming the container copies the elements into storage the container owns, which removes that hazard at the same time as removing the ambiguity.
+
+#### Plain `auto` in a range-based `for` loop over a map copies every element
 
 ```cpp
 for (auto [k, v] : m)         // every pair is copied
 for (const auto& [k, v] : m)  // nothing is copied
 ```
 
-The structured binding syntax is pleasant enough that the copy is easy to overlook, which is exactly what makes this a common source of accidental pessimisation.
+**Solution.** The binding form should be chosen from what the loop body does, exactly as for any other variable, and the structured-binding syntax does not change that reasoning even though it obscures it. A loop that only reads should use `const auto&`, which copies nothing and additionally prevents an accidental write. A loop that modifies the mapped values should use `auto&`, which reaches the container's own elements. A loop that genuinely needs its own copy, perhaps because it modifies that copy while leaving the container intact, should use plain `auto` and should say so in a comment, because a reader will otherwise assume the copy was an oversight.
+
+```cpp
+for (const auto& [key, value] : m) total += value;     // read-only, and nothing is copied
+for (auto& [key, value] : m) value += 10;              // the map's own values are modified
+for (auto [key, value] : m) { value += 10; }           // a copy is modified; the map is unchanged
+```
+
+The cost is easy to underestimate because nothing at the loop announces it. Each iteration of the first form copies a `std::string` key together with the mapped value, and the key copy involves an allocation whenever the string exceeds the small-string buffer, so a loop over a large map can spend more time allocating and releasing keys than doing its own work. One detail is worth knowing in advance: the key of a `std::map` is `const`, so `auto&` binds the key as `const std::string&` and only the mapped value is modifiable, which is the intended design rather than a limitation to work around.
 
 ---
 
@@ -243,7 +310,8 @@ Several constraints apply to any deduced return type. The definition of the func
 
 ### Common pitfalls and solutions
 
-#### A pair of parentheses around a returned name changes the deduced type.
+#### A pair of parentheses around a returned name changes the deduced type
+
 This is the single most dangerous character sequence in the topic.
 
 ```cpp
@@ -253,9 +321,24 @@ std::cout << bad();
 // AddressSanitizer: SEGV
 ```
 
-Writing `return local;` deduces `int`, whereas writing `return (local);` deduces `int&` and therefore returns a reference to an object that has already been destroyed. GCC issues a warning in this case only because the example is simple enough to analyse; routed through a wrapper function the same mistake goes undetected. The solution is never to parenthesise a returned value unless a reference is genuinely intended.
+Writing `return local;` deduces `int`, whereas writing `return (local);` deduces `int&` and therefore returns a reference to an object that has already been destroyed. GCC issues a warning in this case only because the example is simple enough to analyse; routed through a wrapper function the same mistake goes undetected.
 
-#### A deduced `auto` return type strips references.
+**Solution.** Three separate habits together remove this class of error, and each of them addresses a different part of it. The first is never to write parentheses around a returned expression unless a reference is genuinely the intention, since the parentheses carry no other meaning in that position and their only effect is to switch `decltype` from the entity rule to the value-category rule.
+
+```cpp
+decltype(auto) plain() { int local = 42; return local; }    // int, and the value is copied out
+```
+
+The second habit applies whenever `decltype(auto)` really is meant to return a reference, and it is to confirm that the referent outlives the call. A reference to a function-local object never does, whereas a reference to an object with static storage duration, to a member of the object the function was called on, or to an element of a container the caller owns does.
+
+```cpp
+int& counter() { static int c = 41; return c; }
+decltype(auto) safe_ref() { return (counter()); }   // int&, and the referent is a static object
+```
+
+The third habit is to prefer plain `auto` as the return type unless reference preservation is a stated requirement of the function, because `auto` strips references and therefore cannot produce this failure at all. `decltype(auto)` is the right choice for a forwarding wrapper such as the `at` function shown above, and the wrong choice for an ordinary function that merely happens to have been written with it.
+
+#### A deduced `auto` return type strips references
 
 ```cpp
 auto           get(std::vector<int>& v) { return v[0]; }   // returns int, which is a copy
@@ -263,6 +346,21 @@ decltype(auto) ref(std::vector<int>& v) { return v[0]; }   // returns int&, whic
 ```
 
 An attempt to write `get(v) = 42;` fails to compile, which at least makes the problem visible; the subtler cost is a copy on a hot path that nothing draws attention to.
+
+**Solution.** Where a reference is wanted, two spellings supply it, and the choice between them depends on whether the referent's type is known in advance. In a non-template function whose element type is fixed, writing the return type out is the clearest option available, because it states the contract in the signature, which is where a reader will look for it.
+
+```cpp
+int& get_explicit(std::vector<int>& v) { return v[0]; }    // the contract is visible in the signature
+```
+
+In a template, where the element type is not known and may itself turn out to be a reference or a proxy, `decltype(auto)` is the appropriate spelling, since it reproduces whatever the underlying expression produced without the author having to enumerate the possibilities in advance.
+
+```cpp
+template <class C>
+decltype(auto) first(C&& c) { return *std::begin(std::forward<C>(c)); }
+```
+
+Where a copy is genuinely wanted, plain `auto` remains correct and should be left as it is. The point of this pitfall is not that deduced `auto` returns are a mistake, but that the decision between returning a copy and returning a reference is being made by the return-type spelling alone, so that spelling deserves as much attention as the body of the function receives.
 
 ---
 
@@ -318,20 +416,18 @@ template <class T> void g(typename Id<T>::type);
 g(1);   // error: no matching function for call to 'g(int)'
 ```
 
-The parameter `T` appears to the left of a `::`, so the compiler would have to invert an arbitrary mapping in order to recover it, which is not something deduction attempts. The remedy is either to supply the argument explicitly by writing `g<int>(1)` or to restructure the signature so that `T` appears in a deducible position.
+The parameter `T` appears to the left of a `::`, so the compiler would have to invert an arbitrary mapping in order to recover it, which is not something deduction attempts.
 
-A braced list is likewise not deducible for a plain `T` parameter, which is the precise contrast with the behaviour of `auto` described in §2.2.
+A braced list is likewise not deducible for a plain `T` parameter, which is the precise contrast with the behaviour of `auto` described under braced initialisers in Group I.
 
 ```cpp
 template <class T> void f(T);
 f({1, 2});   // error: no matching function for call to 'f(<brace-enclosed initializer list>)'
 ```
 
-The remedy here is to declare the parameter as `std::initializer_list<int>` explicitly, or to construct a container at the call site with something like `f(std::vector{1,2})`.
-
 ### `auto` parameters
 
-Writing `auto` in a parameter list turns the function into a template, and the parameter is deduced using the by-value rules described in §4.1. Four related spellings exist.
+Writing `auto` in a parameter list turns the function into a template, and the parameter is deduced using the by-value rules described under template parameter deduction above. Four related spellings exist.
 
 ```cpp
 auto gl = [](auto a, auto b) { return a + b; };        // a generic lambda, from C++14
@@ -345,14 +441,67 @@ The constrained form is preferable whenever the set of acceptable types is known
 
 ### Common pitfalls and solutions
 
-#### The token `auto&&` does not always mean rvalue reference.
-In any context where deduction takes place, both `auto&&` and `T&&` are forwarding references, and an lvalue argument therefore produces an lvalue reference. The `&&` in a non-deduced declaration such as `void f(std::string&&)` genuinely is an rvalue reference. The distinguishing question is always whether deduction is occurring.
+#### The token `auto&&` does not always mean rvalue reference
 
-#### Deduction cannot be expected in a non-deduced context.
+In any context where deduction takes place, both `auto&&` and `T&&` are forwarding references, and an lvalue argument therefore produces an lvalue reference. The `&&` in a non-deduced declaration such as `void f(std::string&&)` genuinely is an rvalue reference.
+
+**Solution.** The distinguishing question is whether the `&&` is attached to something that is being deduced, and that question can be answered by inspection in every case. When the `&&` follows `auto`, or follows a template parameter belonging to the function itself, deduction is taking place and the parameter is a forwarding reference. When the `&&` follows a concrete type, or follows a template parameter belonging to the enclosing *class* template rather than to the function, no deduction happens at that position and the parameter genuinely is an rvalue reference.
+
+```cpp
+template <class T> void forwarding(T&& x);        // a forwarding reference: T is deduced here
+void rvalue_only(std::string&& s);                 // an rvalue reference: the type is concrete
+
+template <class T>
+struct Holder {
+    void take(T&& x);                              // an rvalue reference: T belongs to the class,
+};                                                 // so nothing is deduced at this position
+```
+
+Where an rvalue reference is genuinely wanted from a function template, the way to obtain one is to remove the deduction rather than to hope that the spelling will supply it, most simply by naming the type or by constraining the parameter so that only an rvalue is accepted. Where a forwarding reference is wanted, an obligation comes with it: the parameter must be passed on with `std::forward<T>` at the point of use, because a parameter that has a name is itself an lvalue however it was declared, and forwarding is what restores the category the caller supplied.
+
+#### Deduction cannot be expected in a non-deduced context
+
 Neither `typename Id<T>::type` nor a braced initialiser list can be deduced from, and the resulting diagnostics tend to report only that no matching function was found.
 
-#### An unconstrained `auto` parameter accepts everything and fails late.
-Because no requirement is stated, an unsuitable argument is diagnosed deep inside the function body rather than at the call site. The solution is to constrain the parameter, using a concept such as `std::integral auto` or `std::ranges::input_range auto`, or a `requires` clause, so that the error names the actual problem where the call was written.
+**Solution.** Two remedies exist for the dependent-name case, and they differ in whether the signature is left alone. The first is to supply the template argument explicitly at the call site, which requires no change to the function at all and is appropriate when the non-deduced position was deliberate, for instance when it exists precisely to prevent deduction from an argument that should not drive it.
+
+```cpp
+template <class T> void g(typename Id<T>::type);
+g<int>(1);      // the argument is supplied by hand, so nothing needs to be deduced
+```
+
+The second is to restructure the signature so that `T` appears somewhere deducible, which is appropriate when the indirection served no purpose to begin with and was simply an accident of how the code grew.
+
+```cpp
+template <class T> void g(T);
+g(1);           // T is now in a deducible position, and the call needs no annotation
+```
+
+For the braced-list case the remedy is either to give the parameter a type that a braced list can initialise, or to construct the object at the call site so that an ordinary argument is passed and deduction proceeds normally.
+
+```cpp
+template <class T> void f(std::initializer_list<T>);
+f({1, 2});                      // the parameter type now matches what a braced list produces
+
+template <class T> void h(T);
+h(std::vector{1, 2});           // an object is constructed first, and deduction proceeds normally
+```
+
+#### An unconstrained `auto` parameter accepts everything and fails late
+
+Because no requirement is stated, an unsuitable argument is diagnosed deep inside the function body rather than at the call site.
+
+**Solution.** Attaching a concept to the parameter moves the diagnosis to the call and names the requirement that was not satisfied, which is the difference between an error a reader can act upon and a page of instantiation backtrace. The standard library supplies concepts for the common cases, and a `requires` clause covers anything the library does not already name.
+
+```cpp
+auto sum_unconstrained(auto a, auto b) { return a + b; }                     // fails inside the body
+auto sum(std::integral auto a, std::integral auto b) { return a + b; }       // fails at the call
+
+template <class T> requires requires (T t) { t.begin(); t.end(); }
+auto count_of(const T& c) { return std::distance(c.begin(), c.end()); }      // an ad-hoc requirement
+```
+
+A constraint brings two further benefits beyond the improved diagnostic. It documents the function's contract in the signature, where it can be read without opening the body, and it participates in overload resolution, so a constrained overload can coexist with a more general fallback for types that do not satisfy it. The accompanying cost is that the concept has to be chosen with some care, since a constraint that is too narrow rejects arguments that would have worked perfectly well, and one that is too broad restores the original problem in a new disguise.
 
 ---
 
@@ -402,20 +551,65 @@ This replaces the older `template <class T, T N>` pattern, in which the caller w
 
 ### Common pitfalls and solutions
 
-#### Class template argument deduction is all or nothing.
-A declaration such as `std::pair<int> p{1, 2.5};` is an error, because partial argument lists are not deduced. Either every argument is written explicitly or none is.
+#### Class template argument deduction is all or nothing
 
-#### Braces and parentheses select different constructors, and the difference is easy to miss.
+A declaration such as `std::pair<int> p{1, 2.5};` is an error, because partial argument lists are not deduced.
+
+**Solution.** Either every argument is written explicitly or none is, and both spellings are perfectly ordinary. Writing them all out is appropriate when a specific instantiation is required, for instance because the deduced answer would not be the wanted one, and omitting them all is appropriate when the constructor arguments already determine the answer unambiguously.
+
+```cpp
+std::pair<int, double> p1{1, 2.5};   // every argument is written out
+std::pair              p2{1, 2.5};   // no argument is written, and both are deduced
+// std::pair<int>      p3{1, 2.5};   // ill-formed: a partial list is not completed by deduction
+```
+
+Where one member should have a specific type and the other should follow from its argument, the way to express that is to convert the argument rather than to write a partial list, because the conversion makes the intention visible at the point where it takes effect and leaves deduction to do the rest.
+
+```cpp
+std::pair p4{1, static_cast<float>(2.5)};   // deduces std::pair<int, float>
+```
+
+#### Braces and parentheses select different constructors, and the difference is easy to miss
 
 ```cpp
 std::vector v2(3, 0.5);   // three elements, each equal to 0.5
 std::vector v3{3, 0.5};   // two elements, and the deduced type is std::vector<double>
 ```
 
-In the second line the literal `3` is silently converted to `3.0`. That conversion is permitted only because `3` is a constant expression whose value is exactly representable as a `double`; the same code written with a variable in place of the literal would be rejected as narrowing. When the distinction matters, the type should be written out explicitly.
+In the second line the literal `3` is silently converted to `3.0`. That conversion is permitted only because `3` is a constant expression whose value is exactly representable as a `double`; the same code written with a variable in place of the literal would be rejected as narrowing.
 
-#### Class template argument deduction does not apply everywhere.
+**Solution.** The reliable habit is to write the element type explicitly whenever a container is being sized and filled rather than listed, because the two constructors then remain distinguishable by their punctuation alone and no deduction contributes to the outcome. Braces can then be reserved for the case where the intention really is to list the elements one by one.
+
+```cpp
+std::vector<double> filled(3, 0.5);   // three elements, and the type is beyond doubt
+std::vector<double> listed{3, 0.5};   // two elements, and the type is beyond doubt
+std::vector         deduced{1, 2, 3}; // a plain list of homogeneous values, where deduction is safe
+```
+
+A second habit reduces the remaining risk further, which is to check the resulting size rather than to assume it, since the two forms differ in the number of elements as well as in the element type. It is also worth remembering that when a container is constructed from a count and a fill value, the parenthesis form is the only one that expresses that intention, and no braced spelling is equivalent to it.
+
+#### Class template argument deduction does not apply everywhere
+
 It was not available for alias templates in C++17, although C++20 added that capability, and it never applies to a bare `auto` data member, because it is fundamentally a feature of the point of construction.
+
+**Solution.** Where deduction is unavailable the type has to be written, and the two situations call for different spellings. For a data member the type is written out in the class body, which is required in any case for a non-static member, and a `using` alias keeps the declaration readable when the type would otherwise be long enough to obscure the member's purpose.
+
+```cpp
+struct Holder {
+    using Map = std::map<std::string, std::vector<int>>;
+    Map data;                                   // the type is named, since auto is not available
+};
+```
+
+For code that must also compile under C++17, an alias template that would have relied on deduction can be replaced by a small factory function, because function templates have deduced their arguments since long before class templates could, and therefore need no new language feature at all.
+
+```cpp
+template <class T> using Ptr = std::shared_ptr<T>;
+// Ptr p = std::make_shared<int>(1);            // not deducible under C++17
+
+template <class T> Ptr<T> make_ptr(T value) { return std::make_shared<T>(std::move(value)); }
+auto p = make_ptr(1);                            // the function template deduces T as int
+```
 
 ---
 
@@ -497,16 +691,45 @@ The trait `std::decay_t` is simply the Group I rule set expressed as a type tran
 
 ### Common pitfalls and solutions
 
-#### The parenthesis rule is easy to forget.
-The expressions `decltype(x)` and `decltype((x))` differ, and because `decltype(auto)` adopts these rules the difference propagates into return types, as pitfall II.1 shows.
+#### The parenthesis rule is easy to forget
 
-#### Calling `std::declval` in evaluated code is an error.
-The function template has no definition, so any use outside an unevaluated context fails at link time, and that failure is intentional.
+The expressions `decltype(x)` and `decltype((x))` differ, and because `decltype(auto)` adopts these rules the difference propagates into return types, as the parenthesis pitfall in Group II shows.
 
-#### The trait `std::decay_t` is often reached for when `std::remove_cvref_t` was meant.
+**Solution.** Two practices keep this distinction from causing trouble. The first is to treat any parentheses appearing inside a `decltype` as significant rather than decorative, and to remove them unless a reference is intended. No other operator in the language changes its meaning when its operand is parenthesised, so the widespread habit of adding parentheses for visual clarity is actively harmful in this one position.
+
+```cpp
+decltype(gi)     // int, which is the declared type of the entity
+decltype((gi))   // int&, which is what the extra parentheses requested
+```
+
+The second practice is to reach for the printing helper whenever the operand of a `decltype` is more complicated than a bare name, because the value-category rule depends on the whole expression rather than on its outermost operator alone. A subexpression that looks like a plain member access may turn out to be an lvalue, an xvalue, or a prvalue depending on how the object it names was obtained, and printing the answer takes considerably less time than deriving it from the rules.
+
+#### Calling `std::declval` in evaluated code is an error
+
+The function template has no definition, so any use outside an unevaluated context fails at link time.
+
+**Solution.** The remedy is to confine `std::declval` to the contexts that never evaluate their operand, which are `decltype`, `sizeof`, `noexcept`, and the requirement bodies of a `requires` expression. Within those contexts it is exactly the right tool and is frequently the only one available, because it manufactures a value of a type that may have no usable constructor whatsoever.
+
+```cpp
+using Result = decltype(std::declval<Widget&>().compute(std::declval<const Input&>()));
+static_assert(sizeof(std::declval<Widget>()) > 0);
+constexpr bool nothrow = noexcept(std::declval<Widget&>().compute(std::declval<const Input&>()));
+```
+
+Where a real object is needed rather than a fictional one, the remedy is to construct an object, and where construction is genuinely impossible the surrounding code should be restated as a type query rather than as a computation. A link failure whose message names `declval` is almost always the sign that an expression intended purely as a query has escaped into evaluated code, most often because a surrounding `decltype` was dropped during an edit.
+
+#### The trait `std::decay_t` is often reached for when `std::remove_cvref_t` was meant
+
 In addition to stripping references and cv-qualifiers, `std::decay_t` converts arrays to pointers and functions to function pointers, which is rarely the intent when the goal is merely to obtain a plain value type.
 
----
+**Solution.** The choice follows from a single question, which is whether the array and function conversions are wanted alongside the stripping. When the purpose is to reproduce what a by-value parameter or an `auto` variable would deduce, `std::decay_t` is correct precisely because it performs those conversions as well. When the purpose is only to remove references and cv-qualifiers, so that two types can be compared or a value can be stored, `std::remove_cvref_t` is correct, and it has the additional merit of saying exactly that in its name.
+
+```cpp
+std::decay_t<const int(&)[3]>         // const int*, since the array decayed to a pointer
+std::remove_cvref_t<const int(&)[3]>  // int[3], since the extent survived and only const went
+```
+
+The difference is easy to overlook because the two traits agree on the scalar types that appear in most examples, and they diverge only for arrays and for functions. A trait chosen out of habit rather than by intent therefore compiles and behaves correctly right up until the day an array is passed to it, which is why the question above is worth asking at the moment the trait is written rather than later.
 
 ## Quick reference
 
@@ -540,8 +763,7 @@ Each row below states how one spelling treats the four properties that deduction
 1. The keyword `auto` strips types while the operator `decltype` keeps them, so the choice between them follows from whether references and `const` are meant to survive.
 2. Parentheses change the answer that `decltype` gives, because `decltype(x)` reports the declared type of an entity whereas `decltype((x))` reports `T&` for any lvalue.
 3. The token `auto&&` denotes a forwarding reference wherever deduction is taking place, and it denotes an rvalue reference only where no deduction occurs.
-4. Whenever the deduced type is in doubt, it should be printed rather than guessed, using the helper given in §0.
-
+4. Whenever the deduced type is in doubt, it should be printed rather than guessed, using the helper given at the start of this tutorial.
 
 ---
 
@@ -796,8 +1018,6 @@ The deduced type carries the safety property, and the error arrives at the point
 auto data = make_vector();
 auto it = std::ranges::find(data, 2);      // a real iterator into `data`
 ```
-
----
 
 ### The five groups, as they appear in ranges
 
