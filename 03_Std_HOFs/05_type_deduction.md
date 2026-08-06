@@ -542,6 +542,310 @@ Each row below states how one spelling treats the four properties that deduction
 3. The token `auto&&` denotes a forwarding reference wherever deduction is taking place, and it denotes an rvalue reference only where no deduction occurs.
 4. Whenever the deduced type is in doubt, it should be printed rather than guessed, using the helper given in §0.
 
+
+---
+
+## Type Deduction in `std::ranges` and Views
+
+The ranges library is the most deduction-dependent part of the standard library, and the dependence is not a matter of style. Several range types cannot be written out by hand at all, which turns `auto` from a convenience into a requirement, and the library's own vocabulary consists almost entirely of deduction machinery exposed under readable names. 
+
+The type of even a modest pipeline is large, and printing it makes the point better than any description.
+
+```cpp
+std::vector<int> v{1, 2, 3, 4, 5, 6};
+auto pipe = v | rv::filter([](int x){ return x % 2 == 0; })
+              | rv::transform([](int x){ return x * 10; });
+
+// The deduced type is:
+//   std::ranges::transform_view<
+//       std::ranges::filter_view<
+//           std::ranges::ref_view<std::vector<int>>,
+//           main()::<lambda(int)>>,
+//       main()::<lambda(int)>>
+```
+
+Two features of that type make it unusable as a written declaration. The first is length, which grows with every stage added. The second is decisive: the type embeds the closure types of the two lambdas, and a closure type has no name that can be written in source code. Even a second lambda with an identical body would produce a different type, so an attempt to declare a variable of the pipeline's type and assign a freshly built pipeline to it fails.
+
+```cpp
+auto p = v | rv::filter([](int x){ return x % 2 == 0; });
+decltype(p) q = v | rv::filter([](int x){ return x % 2 == 0; });
+// error: conversion from 'filter_view<[...],main()::<lambda(int)>>'
+//        to non-scalar type 'filter_view<[...],main()::<lambda(int)>>' requested
+```
+
+The two lambdas are written identically and are nonetheless distinct types. This is why Group I deduction, in the form of `auto` on the left of a pipeline, is the only practical way to hold the result, and why Group II deduction, in the form of a deduced return type, is the only practical way to return one.
+
+### Group I in ranges: storing a pipeline
+
+#### What `auto` actually deduces
+
+Writing `auto pipe = ...` deduces a **view object**, which is a small value holding iterators or a pointer to the source together with any predicates supplied. It does not deduce a container, and it does not hold elements. The sizes below make the distinction concrete.
+
+```cpp
+std::vector<int> v(1000, 1);
+auto pipe = v | rv::filter([](int x){ return x % 2 == 0; })
+              | rv::transform([](int x){ return x * 2; });
+
+sizeof(rv::all(v));   //  8 bytes, a ref_view holding a pointer to the vector
+sizeof(pipe);         // 16 bytes, the whole two-stage pipeline
+// the vector's own elements occupy 4000 bytes, none of which the pipeline owns
+```
+
+The size depends on what the adaptors were given. Captureless lambdas are empty types and add nothing, as above, whereas passing named functions stores a function pointer per stage and brings the same pipeline to 32 bytes. Either figure is negligible beside the elements, which is the point.
+
+Because a view is this small, copying one is cheap, and that fact drives the interface conventions discussed under Group III below.
+
+#### The reference type decides the loop variable
+
+Range-based `for` performs Group I deduction on each element, and what it may deduce is fixed by the range's *reference type*, which the library exposes as `std::ranges::range_reference_t`.
+
+```cpp
+std::ranges::range_reference_t<std::vector<int>&>;                    // int&
+std::ranges::range_reference_t<decltype(v | rv::transform(doubler))>; // int
+```
+
+A `std::vector` yields real references, so `auto&` binds. A `transform_view` yields computed prvalues, so `auto&` has nothing to bind to.
+
+```cpp
+for (auto& x : v | rv::transform([](int y){ return y * 2; })) { /* ... */ }
+// error: cannot bind non-const lvalue reference of type 'int&' to an rvalue of type 'int'
+```
+
+The remedy is `auto&&`, which is a forwarding reference and therefore binds to a reference where one exists and to a prvalue where one does not. This is the reason `auto&&` is the recommended default in range-based `for` over any pipeline: it is the single spelling that is correct regardless of what the reference type turns out to be.
+
+```cpp
+for (auto&& x : v | rv::transform([](int y){ return y * 2; })) { /* ... */ }   // always valid
+```
+
+#### Structured bindings over `zip` and `enumerate`
+
+The C++23 views `zip` and `enumerate` yield tuples, and the exact reference type determines how a structured binding behaves. The observed reference types are informative.
+
+```cpp
+std::ranges::range_reference_t<decltype(rv::enumerate(names))>;  // std::tuple<long, std::string&>
+std::ranges::range_reference_t<decltype(rv::zip(a, b))>;         // std::pair<int&, int&>
+```
+
+Both are tuples of **references**. A plain `auto` binding therefore copies the tuple, but the copy holds the same references, so a write through a binding still reaches the underlying range.
+
+```cpp
+std::vector<std::string> names{"a", "b"};
+for (auto  [i, s] : rv::enumerate(names)) s += "!";   // names becomes {"a!", "b!"}
+for (auto&& [i, s] : rv::enumerate(names)) s += "?";  // names becomes {"a!?", "b!?"}
+```
+
+This differs from a structured binding over a `std::pair` that holds values rather than references, where a plain `auto` genuinely does copy and the write is lost.
+
+```cpp
+std::pair<int, std::string> p{1, "x"};
+auto [a, b] = p;  b += "!";     // p.second is still "x", because the pair was copied
+```
+
+The distinction is worth stating plainly, because the two cases are written identically. What a structured binding copies is the range's reference type, and whether a write survives depends on whether that type holds values or references. For `zip` and `enumerate` it holds references and writes survive; for an aggregate of values it does not and they do not. `auto&&` remains the better default nonetheless, because it avoids copying the proxy and continues to work when the reference type is a prvalue.
+
+#### The caching in `filter_view` blocks `const auto&`
+
+A `filter_view` caches the position of its first element on the first call to `begin()`, which makes that member function non-`const` and the view as a whole not const-iterable. A helper taking `const auto&` therefore fails to compile.
+
+```cpp
+void print(const auto& r) { for (auto x : r) std::cout << x; }
+print(v | rv::filter([](int x){ return x % 2; }));
+// error: passing 'const std::ranges::filter_view<...>' as 'this' argument discards qualifiers
+```
+
+The remedy follows from the size measurements above: views are cheap, so taking them by value or by forwarding reference costs nothing.
+
+```cpp
+void print(std::ranges::input_range auto&& r) { for (auto&& x : r) std::cout << x; }
+```
+
+### Group II in ranges: returning a pipeline
+
+Because the type cannot be written, a function that returns a pipeline must use a deduced return type.
+
+```cpp
+auto evens_of(std::vector<int>& v) {
+    return v | rv::filter([](int x){ return x % 2 == 0; });
+}
+
+for (int x : evens_of(v)) { /* yields 2, 4, 6 */ }
+```
+
+This is convenient and carries a hazard that the deduction itself conceals. The deduced type contains a `ref_view` referring to whatever was piped in, and nothing in the signature shows it. When the source is a local object, the returned view outlives it.
+
+```cpp
+auto broken() {
+    std::vector<int> local{1, 2, 3, 4};
+    return local | rv::filter([](int x){ return x % 2 == 0; });   // a ref_view over `local`
+}                                                                  // `local` is destroyed here
+// reading the result reports stack-use-after-return under AddressSanitizer
+```
+
+The parameter version above is safe because the caller owns the vector; the local version is not. The distinction is exactly the one drawn under Group IV below, where `views::all_t` decides between referring and owning, and it is invisible at the point where `auto` appears.
+
+`decltype(auto)` has its own role here, in element access rather than in returning pipelines. A helper that must forward an element with its own value category intact uses the decltype rules rather than the template-deduction rules.
+
+```cpp
+template <std::ranges::random_access_range R>
+decltype(auto) nth(R&& r, std::ranges::range_difference_t<R> i) {
+    return std::ranges::begin(std::forward<R>(r))[i];
+}
+
+nth(v, 0) = 99;                 // the return type is int&, so the write reaches the vector
+decltype(nth(v, 0));            // int&
+decltype(nth(transform_pipe, 0)); // int, because a transform_view yields a prvalue
+```
+
+Had the return type been written as plain `auto`, the reference would have been stripped and the assignment would not compile.
+
+### Group III in ranges: deducing from arguments
+
+#### Constrained `auto` parameters
+
+The ranges library is designed around constrained parameters, which are abbreviated function templates whose `auto` is qualified by a concept. This is Group III deduction with a requirement attached.
+
+```cpp
+void take_any(std::ranges::input_range auto&& r) {
+    std::cout << "value type: "
+              << type_name<std::ranges::range_value_t<decltype(r)>>() << "\n";
+}
+
+take_any(v);                                                  // value type: int
+take_any(v | rv::transform([](int x){ return std::to_string(x); }));  // value type: std::string
+```
+
+The concept is not decoration. An unconstrained `auto` parameter accepts any argument and fails deep inside the body, whereas `std::ranges::input_range auto&&` reports an unsuitable argument at the call site and names the unsatisfied requirement.
+
+Adaptors constrain their range parameter with `std::ranges::viewable_range`, which asks whether the argument can safely be turned into a view. The concept exists precisely because deduction must decide between two very different outcomes, and that decision is the subject of the next section.
+
+### Group IV in ranges: `views::all_t` and the ownership decision
+
+Every adaptor's deduction guide routes its range argument through `std::views::all_t`, and that alias is where the library decides whether the resulting view will *refer to* the source or *own* it.
+
+```cpp
+std::views::all_t<std::vector<int>&>;   // std::ranges::ref_view<std::vector<int>>
+std::views::all_t<std::vector<int>>;    // std::ranges::owning_view<std::vector<int>>
+```
+
+An lvalue container yields a `ref_view`, which stores a pointer and owns nothing. An rvalue container yields an `owning_view`, which moves the container in and keeps it alive. The consequence is that the widely repeated warning that a view over a temporary always dangles is not correct: piping an rvalue container is safe, because deduction selected ownership.
+
+```cpp
+auto owning = std::vector<int>{1, 2, 3, 4} | rv::filter([](int x){ return x % 2 == 0; });
+for (int x : owning) { /* yields 2 and 4 — the vector was moved into the pipeline */ }
+```
+
+What dangles is a view over a **named local**, because a named lvalue selects `ref_view`, as the broken function under Group II showed. The deciding factor is the value category of the argument at the point where the pipeline was built, and `views::all_t` is the mechanism that reads it.
+
+Class template argument deduction appears elsewhere in the library as well. The view types carry deduction guides, and `std::ranges::subrange` is the most commonly constructed of them.
+
+```cpp
+auto sr = std::ranges::subrange(v.begin(), v.end());
+// deduces std::ranges::subrange<__normal_iterator<int*, vector<int>>,
+//                               __normal_iterator<int*, vector<int>>,
+//                               std::ranges::subrange_kind::sized>
+```
+
+The third template argument is deduced too: the guide determines that the iterator and sentinel support a difference operation and therefore selects the sized specialisation, which allows `size()` to be O(1).
+
+### Group V in ranges: the alias templates are deduction machinery
+
+The library's vocabulary types are Group V constructs, meaning they compute a type from types already known rather than deducing from an initializer or an argument. Each is defined through `decltype` applied to an expression involving `std::declval`, and the definition can be reproduced in a few lines.
+
+```cpp
+template <class R>
+using my_range_value_t =
+    std::remove_cvref_t<decltype(*std::ranges::begin(std::declval<R&>()))>;
+
+std::is_same_v<my_range_value_t<std::vector<int>>,
+               std::ranges::range_value_t<std::vector<int>>>;      // true
+
+auto pipe = v | rv::transform([](int x){ return x * 1.5; });
+std::is_same_v<my_range_value_t<decltype(pipe)>,
+               std::ranges::range_value_t<decltype(pipe)>>;        // true, and the type is double
+```
+
+Nothing is evaluated in that definition: `std::declval<R&>()` manufactures a fictional range, `std::ranges::begin` is never actually called, and `decltype` merely classifies the result. The whole family works the same way.
+
+| Alias | What it names, for a range `R` |
+|---|---|
+| `std::ranges::iterator_t<R>` | The type returned by `ranges::begin(r)` |
+| `std::ranges::sentinel_t<R>` | The type returned by `ranges::end(r)`, which need not equal the iterator type |
+| `std::ranges::range_reference_t<R>` | The type of `*it`, which decides what a loop variable may bind to |
+| `std::ranges::range_value_t<R>` | That reference type with references and cv-qualifiers removed |
+| `std::ranges::range_difference_t<R>` | The signed type used for distances |
+| `std::ranges::borrowed_iterator_t<R>` | An iterator when the range is safe to return one from, and `std::ranges::dangling` otherwise |
+
+The values observed for the two-stage pipeline from the opening section illustrate why these aliases are needed rather than optional. Its `range_value_t` is a plain `int`, but its `iterator_t` is a nested class of the outer view, and its `sentinel_t` happens to be that same type here while in general it need not be.
+
+#### `dangling` is a deduced return type used as a safety device
+
+The last alias in the table deserves separate attention, because it shows deduction being used to prevent a bug rather than merely to save typing. An algorithm that would return an iterator into an rvalue range instead returns `std::ranges::dangling`.
+
+```cpp
+std::ranges::borrowed_iterator_t<std::vector<int>&>;   // __normal_iterator<int*, vector<int>>
+std::ranges::borrowed_iterator_t<std::vector<int>>;    // std::ranges::dangling
+
+auto it = std::ranges::find(std::vector<int>{1, 2, 3}, 2);
+std::cout << *it;
+// error: no match for 'operator*' (operand type is 'std::ranges::dangling')
+```
+
+The deduced type carries the safety property, and the error arrives at the point of use rather than as undefined behaviour at run time. Naming the range restores the ordinary iterator type, because an lvalue range is a borrowed range for this purpose.
+
+```cpp
+auto data = make_vector();
+auto it = std::ranges::find(data, 2);      // a real iterator into `data`
+```
+
+---
+
+### The five groups, as they appear in ranges
+
+| Group | Deduces from | Where it appears in ranges |
+|---|---|---|
+| I | An initializer | `auto pipe = rng \| adaptor(...)`, which is mandatory because the type is unnameable; `auto&&` as the loop variable in range-based `for`; structured bindings over `zip` and `enumerate` |
+| II | A return statement | Functions returning pipelines, which must use a deduced return type; `decltype(auto)` for element access that preserves the reference |
+| III | Call arguments | Constrained parameters such as `std::ranges::input_range auto&&`; forwarding a range with `std::forward` into `views::all` |
+| IV | Constructor arguments or a value | Deduction guides on every view; `views::all_t` choosing `ref_view` or `owning_view`; `subrange` deducing its kind |
+| V | Nothing, the type is named | `iterator_t`, `sentinel_t`, `range_value_t`, `range_reference_t`, `range_difference_t`, and `borrowed_iterator_t`, all defined through `decltype` and `declval` |
+
+### Pitfalls that live at the intersection
+
+#### A deduced pipeline is a view, not a snapshot.
+Group I deduces a lightweight object that refers to the source, so a later change to the source changes what the pipeline yields. Materialising into a container is the remedy where a snapshot is intended, and `std::ranges::to` provides it from C++23 onwards, although libstdc++ ships that facility only from GCC 14, so an explicit `ranges::copy` into a `back_inserter` remains the portable form.
+
+#### A deduced return type hides whether the result refers or owns.
+The signature `auto f(...)` reveals nothing about the `ref_view` inside, so the lifetime obligation has to be reasoned out from what was piped in rather than read off the declaration.
+
+#### `auto&` is wrong more often than it looks.
+Any pipeline whose reference type is a prvalue rejects it, and that includes every `transform_view` whose function returns by value. `auto&&` is correct in both cases.
+
+#### `const auto&` is wrong for several view types.
+The caching that makes `filter_view` efficient also makes it non-const-iterable, and `drop_while_view` and `split_view` behave the same way. Taking views by value or by forwarding reference avoids the problem entirely.
+
+#### Reading a deduced type is often faster than reasoning about it.
+Given how large these types are, printing `std::ranges::range_reference_t<decltype(pipe)>` answers questions about binding far more quickly than working through the adaptors by hand.
+
+---
+
+### The run-time counterpart: type erasure
+
+All of the above is compile-time deduction, and the concrete pipeline type is fixed before the program runs. That property is what allows the optimiser to inline an entire pipeline, and it is also what prevents two different pipelines from being stored in the same variable, returned from the same virtual function, or held in a container together.
+
+The standard library offers no type-erased view. A facility of that kind exists in range-v3 under the name `any_view`, and a proposal exists to standardise something similar, but no such type is present in C++23 or in libstdc++ 13. Where run-time flexibility is genuinely required, the erasure has to be built in the ordinary way, most simply by erasing the *consumer* rather than the range.
+
+```cpp
+void consume(std::function<void(int)> sink, std::ranges::input_range auto&& r) {
+    for (auto&& x : r) sink(x);
+}
+
+int total = 0;
+consume([&](int x){ total += x; }, v | rv::filter([](int x){ return x % 2 == 0; }));
+// total is 6
+```
+
+Here, the pipeline keeps its concrete deduced type, which the template parameter absorbs, and only the callback is erased. Erasing the range itself instead requires a hand-written wrapper holding a virtual iterator interface, and the cost is the one type erasure always carries: an indirect call for every increment and every dereference, which is precisely the cost that deduced pipeline types avoid.
+
 Sources:
 
 * https://medium.com/@nubb/c-9-type-deduction-in-c-208c804dd792
