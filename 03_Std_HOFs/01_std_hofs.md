@@ -26,22 +26,6 @@ std::accumulate   std::thread          std::bind          (adaptor closures)
 
 The word "function" is used loosely above, because C++ has several distinct things that can be called. A higher-order function in this library accepts all of them, and the reason is worth understanding before the catalogue begins.
 
-### What can be passed
-
-The standard defines a single operation, named INVOKE, that describes how to call any callable. Every higher-order facility in the library is specified in terms of INVOKE rather than in terms of ordinary call syntax, which is why the same algorithm accepts all of the following without any overloading on the library's part.
-
-| Kind of callable | Example | Carries state? |
-|---|---|---|
-| Function pointer | `bool is_even(int);` passed as `is_even` | No |
-| Lambda without captures | `[](int x){ return x % 2 == 0; }` | No |
-| Lambda with captures | `[k](int x){ return x % k == 0; }` | Yes |
-| Function object, or functor | `struct Div { int k; bool operator()(int) const; };` | Yes |
-| Standard function object | `std::less<>{}`, `std::plus<>{}` | No |
-| Pointer to member function | `&Widget::scale` | No, the object is passed separately |
-| Pointer to data member | `&Person::age` | No, and the call is a read |
-| Type-erased wrapper | `std::function<bool(int)>` | Yes, and it owns the target |
-
-The last two rows deserve a note. A pointer to a member cannot be called with plain `f(args)` syntax at all, yet algorithms accept it, because INVOKE supplies the rule that the object comes first. A pointer to a *data* member is not a function in any ordinary sense, and INVOKE nonetheless treats reading it as a call, which is what allows `&Person::age` to be handed to a ranges algorithm as a key extractor.
 ## Components of standard HOFs
 The implementation of standard higher order functions in C++ is based on the following components:
 ### Callable entities
@@ -94,6 +78,23 @@ Standard HOFs in C++ are built on:
 * Behavior (Callable entities): Defines what operation should be performed.
 * Data (Containers, iterators, ranges): Defines where the operation is applied.
 * Control (Execution policy & seed values): Defines how and from what starting point the operation is executed (see [Control parameters](https://github.com/vaishavs/Functional-Programming-CPP/blob/main/03_Std_HOFs/02_note.md#14-control-parameters)).
+
+### What can be passed
+
+The standard defines a single operation, named INVOKE, that describes how to call any callable. Every higher-order facility in the library is specified in terms of INVOKE rather than in terms of ordinary call syntax, which is why the same algorithm accepts all of the following without any overloading on the library's part.
+
+| Kind of callable | Example | Carries state? |
+|---|---|---|
+| Function pointer | `bool is_even(int);` passed as `is_even` | No |
+| Lambda without captures | `[](int x){ return x % 2 == 0; }` | No |
+| Lambda with captures | `[k](int x){ return x % k == 0; }` | Yes |
+| Function object, or functor | `struct Div { int k; bool operator()(int) const; };` | Yes |
+| Standard function object | `std::less<>{}`, `std::plus<>{}` | No |
+| Pointer to member function | `&Widget::scale` | No, the object is passed separately |
+| Pointer to data member | `&Person::age` | No, and the call is a read |
+| Type-erased wrapper | `std::function<bool(int)>` | Yes, and it owns the target |
+
+The last two rows deserve a note. A pointer to a member cannot be called with plain `f(args)` syntax at all, yet algorithms accept it, because INVOKE supplies the rule that the object comes first. A pointer to a *data* member is not a function in any ordinary sense, and INVOKE nonetheless treats reading it as a call, which is what allows `&Person::age` to be handed to a ranges algorithm as a key extractor.
 
 ## Category one — facilities that consume a callable
 
