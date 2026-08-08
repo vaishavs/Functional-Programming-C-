@@ -70,6 +70,31 @@ To illustrate diagrammatically:
 
 [![Copilot-20260214-125707.png](https://i.postimg.cc/RVWj6PPY/Copilot-20260214-125707.png)](https://postimg.cc/D8KCRc3Q)
 
+### Workflow
+A standard HOF typically follows this structure:
+```
+algorithm(execution_policy?, range_begin, range_end, seed?, callable);
+```
+For example:
+```cpp
+int sum = std::accumulate(
+    vec.begin(),
+    vec.end(),
+    0,
+    [](int a, int b) { return a + b; }
+);
+```
+Here:
+* Execution context → `vec.begin()`, `vec.end()`
+* Seed value → `0`
+* Callable (operator) → `[](int a, int b) { return a + b; }`
+* Algorithm (HOF) → `std::accumulate`
+
+Standard HOFs in C++ are built on:
+* Behavior (Callable entities): Defines what operation should be performed.
+* Data (Containers, iterators, ranges): Defines where the operation is applied.
+* Control (Execution policy & seed values): Defines how and from what starting point the operation is executed (see [Control parameters](https://github.com/vaishavs/Functional-Programming-CPP/blob/main/03_Std_HOFs/02_note.md#14-control-parameters)).
+
 ## Category one — facilities that consume a callable
 
 This is by far the largest group. The callable arrives as an ordinary function argument, and the algorithm calls it once per element or once per pair of elements.
