@@ -4,26 +4,6 @@ A large part of the C++ standard library is built on a single idea: a function c
 
 A function is higher-order when it does at least one of two things: it **takes** one or more functions as arguments, or it **returns** a function. A function that does neither is called first-order, and the great majority of ordinary code consists of first-order functions.
 
-```
-                        HIGHER-ORDER FUNCTIONS
-                                  │
-             ┌────────────────────┴────────────────────┐
-             │                                         │
-      TAKES a callable                          RETURNS a callable
-             │                                         │
-   ┌─────────┴─────────┐                     ┌─────────┴─────────┐
-   │                   │                     │                   │
-std::find_if      std::sort            std::bind_front    std::views::filter
-std::transform    std::visit           std::not_fn        std::mem_fn
-std::accumulate   std::thread          std::bind          (adaptor closures)
-   │                                                             │
-   └──────────────────────► BOTH ◄──────────────────────────────┘
-                              │
-                    std::views::transform(f)
-              takes a callable, returns a closure,
-           and that closure takes a range and returns a view
-```
-
 The word "function" is used loosely above, because C++ has several distinct things that can be called. A higher-order function in this library accepts all of them, and the reason is worth understanding before the catalogue begins.
 
 ## Components of standard HOFs
@@ -95,6 +75,37 @@ The standard defines a single operation, named INVOKE, that describes how to cal
 | Type-erased wrapper | `std::function<bool(int)>` | Yes, and it owns the target |
 
 The last two rows deserve a note. A pointer to a member cannot be called with plain `f(args)` syntax at all, yet algorithms accept it, because INVOKE supplies the rule that the object comes first. A pointer to a *data* member is not a function in any ordinary sense, and INVOKE nonetheless treats reading it as a call, which is what allows `&Person::age` to be handed to a ranges algorithm as a key extractor.
+
+## Types of standard HOFs
+```
+                        HIGHER-ORDER FUNCTIONS
+                                  │
+             ┌────────────────────┴────────────────────┐
+             │                                         │
+      TAKES a callable                          RETURNS a callable
+             │                                         │
+   ┌─────────┴─────────┐                     ┌─────────┴─────────┐
+   │                   │                     │                   │
+std::find_if      std::sort            std::bind_front    std::views::filter
+std::transform    std::visit           std::not_fn        std::mem_fn
+std::accumulate   std::thread          std::bind          (adaptor closures)
+   │                                                             │
+   └──────────────────────► BOTH ◄──────────────────────────────┘
+                              │
+                    std::views::transform(f)
+```
+This diagram sorts C++'s higher-order functions according to the role a callable plays in a function's signature: whether it is passed in as an argument, returned as a result, or both.
+
+#### Takes a callable
+This group invokes the callable passed to it, typically while iterating over data. For instance, `std::find_if` calls its predicate once per element until one returns true, `std::transform` applies a unary or binary operation to elements as they are written to an output range, `std::accumulate` folds a binary operation across a range to produce a single value, `std::sort` calls a comparator to establish ordering, `std::visit` calls a visitor with whichever alternative is currently active in a `std::variant`, and `std::thread`'s constructor takes a callable and runs it on a new thread. In each case, the callable is executed directly; what comes back is a value, an iterator, or a thread handle — never a new function.
+
+#### Returns a callable
+This group does not execute anything directly; instead, it produces new callables for later use. For instance, `std::bind` and `std::bind_front` take a callable plus some arguments and return a new callable with those arguments already bound in, the `std::not_fn` takes a predicate and returns one that negates it, `std::mem_fn` takes a pointer to a member function or member variable — neither directly invocable with `()` on its own — and wraps it into an ordinary callable object, and `std::views::filter`, given a predicate, returns a *range adaptor closure*: a callable that has not yet been applied to any data. Each of these acts as a factory; the role is to package a callable, not to invoke it.
+
+#### Both
+The `std::views::transform` is an interesting case that takes as well as returns a callable. It involves two related calls. The outer call — `std::views::transform(f)` — takes a callable, `f`, as its argument, matching the defining trait of the "takes a callable" group. Rather than invoking `f`, however, it returns a closure object, matching the defining trait of the "returns a callable" group. That closure is itself callable. Because the outer call both accepts a callable and produces one, `std::views::transform` satisfies both categories at once.
+
+The underlying pattern reflects standard functional-programming vocabulary applied to C++: the "takes" group consists of ordinary higher-order algorithms; the "returns" group consists of combinators for partial application and adaptation (`bind_front`, `not_fn`) or for wrapping non-callable-looking constructs into callables (`mem_fn`); the range adaptors build on that combinator machinery so they can compose using `|`.
 
 ## Category one — facilities that consume a callable
 
