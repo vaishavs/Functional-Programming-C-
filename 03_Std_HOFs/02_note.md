@@ -1,577 +1,829 @@
-# How Not to Use Standard Ranges and Views in C++
-
-The C++20 ranges library replaces iterator pairs with composable pipelines, and nearly every sharp edge in it follows from a single fact:
-
-> **A view is a lazy reference to data, not a container holding data.**
-
-**Contents**
-
-- Part I — Lifetime and ownership (§1–§5)
-- Part II — Laziness and cost (§6–§9)
-- Part III — Mutation (§10–§12)
-- Part IV — Type-system and interop (§13–§17)
-- Part V — Individual adaptors (§18–§23)
-- Part VI — Toolchain availability
-- Quick reference
-
----
-
-## Part I — Lifetime and ownership
-
-### 1. Treating a view as a snapshot
-
-A pipeline stores no elements. It refers to the source and recomputes on every traversal, so a later change to the source changes what the view yields.
+# C++ Ranges and Views
+From C++98 through C++17, every standard algorithm took a *pair* of iterators delimiting a
+half-open interval `[first, last)`:
 
 ```cpp
-std::vector<int> a{1, 2, 3};
-auto doubled = a | rv::transform([](int x) { return x * 2; });
-
-a[0] = 100;
-for (int x : doubled) std::cout << x << " ";   // 200 4 6   — not 2 4 6
+std::vector<int> v{5, 3, 9, 1};
+std::sort(v.begin(), v.end());
+auto it = std::find(v.begin(), v.end(), 9);
 ```
 
-The variable is named as though it holds results, but nothing was computed where it was declared. This is the root misconception behind §2, §5, §9 and §11 as well.
+The half-open convention is a genuinely good design. It makes the number of elements equal
+`last - first`, makes empty ranges representable without a special case (`first == last`),
+and allows subranges to be expressed by moving the endpoints.
 
-**Solution — materialise when a snapshot is wanted.** C++23 spells this `std::ranges::to`; libstdc++ ships it in GCC 14, so on GCC 13 the portable form is an explicit copy:
+```
+half-open interval [first, last)
+
+  index:    0     1     2     3     4
+          +-----+-----+-----+-----+-----+
+   data:  |  5  |  3  |  9  |  1  |  7  |
+          +-----+-----+-----+-----+-----+
+          ^                             ^
+          first                         last   (one past the end)
+
+  size == last - first == 5
+  empty when first == last
+```
+### Four problems with the iterator-pair model
+
+1. **Verbosity at the call site**: The overwhelmingly common case is "the whole container", which must nonetheless be spelled with two expressions that repeat the container name.
+
+2. **No composition**: Algorithms consume iterator pairs and write to output iterators. To express "the squares of the even elements", the classical options are a raw loop, or a sequence of algorithm calls each materialising a temporary container. Neither composes as an expression.
+
+    ```cpp
+    // classical: two passes and a temporary
+    std::vector<int> evens;
+    std::copy_if(v.begin(), v.end(), std::back_inserter(evens),
+                 [](int x) { return x % 2 == 0; });
+    std::vector<int> result;
+    std::transform(evens.begin(), evens.end(), std::back_inserter(result),
+                   [](int x) { return x * x; });
+    ```
+
+3. **No compile-time checking of iterator requirements**: Passing a `std::list` iterator to `std::sort` compiles the call and fails deep inside the implementation, producing the error messages that gave templates their reputation.
+
+4. **Mismatched iterators are undefined behaviour, not a compile error**: Nothing prevents `std::find(a.begin(), b.end(), x)`.
+
+## Ranges
+With the introduction of Ranges and Views in C++20, working with algorithms became more expressive and easier to read. 
+**A caveat stated early.** Ranges are not uniformly superior. They increase compile times, their diagnostics — though better than pre-concepts templates — are still long, debug-build performance can be noticeably worse, and some pipelines re-evaluate work in ways that surprise newcomers.
+
+A *range* is a representation of a asequence of elements with a begin iterator and an end sentinel. It is anything that `rg::begin()` and `rg::end()` can be called on. That is the entire requirement:
 
 ```cpp
-std::vector<int> snap;
-std::ranges::copy(a | rv::transform([](int x) { return x * 2; }), std::back_inserter(snap));
-
-// C++23, GCC 14+ / recent libc++:
-// auto snap = a | rv::transform([](int x){ return x * 2; }) | std::ranges::to<std::vector>();
+template <class T>
+concept range = requires (T& t) {
+    rg::begin(t);
+    rg::end(t);
+};
 ```
 
-Keep the view when the result is consumed once, immediately, in the same scope. Materialise when it outlives the source, is traversed more than once, or must be stable.
-
-### 2. Assuming every view over a temporary dangles
-
-This warning is widely repeated and is *wrong* for the case most often cited. Piping an **rvalue container** moves it into an `owning_view`, which keeps it alive for as long as the pipeline lives:
+Consequently, the following are all ranges: every standard container, C arrays, `std::string_view`, `std::initializer_list`, and every view. Raw arrays work because `rg::begin` handles them:
 
 ```cpp
-auto owning = std::vector<int>{1, 2, 3, 4} | rv::filter([](int x) { return x % 2 == 0; });
-for (int x : owning) std::cout << x << " ";    // 2 4   — safe; the vector was moved in
+int arr[] = {5, 2, 8};
+rg::sort(arr);                 // compiles; no arr + 3 needed
+// arr is now {2, 5, 8}
+static_assert(rg::contiguous_range<decltype(arr)>);
 ```
 
-The genuinely broken case is a view over a **named local**, which is captured by `ref_view` and extends nothing:
+### Sentinel
+In the classical model, `first` and `last` of a sequence have the *same type*. But in the ranges model, `end()` returns a *sentinel*, i.e., *any type* comparable with the iterator via `==`.
+
+```
+Classical:                        
+
+  iterator ----> ... ----> iterator
+     |                        |
+   same type              same type
+```
+```
+Ranges:
+
+    iterator ----> ... ----> sentinel
+    |                        |
+    any type            "is this the end?" oracle
+```
+The sentinel does not have to *point* anywhere. It only has to answer the question "is this iterator at the end?". Three consequences follow.
+
+#### 1. Ranges with cheap end-detection stop being awkward.
+A null-terminated C string has no end iterator without first walking it. With a sentinel, the walk disappears:
 
 ```cpp
-auto make_bad() {
-    std::vector<int> local{1, 2, 3, 4};
-    return local | rv::filter([](int x) { return x % 2 == 0; });   // ref_view over `local`
-}                                                                   // `local` dies here
-auto v = make_bad();
-for (int x : v) /* ... */ ;      // AddressSanitizer: stack-use-after-return
+struct null_sentinel {
+    friend bool operator==(char const* p, null_sentinel) { return *p == '\0'; }
+};
+
+char const* msg = "hello";
+auto cstr = rg::subrange(msg, null_sentinel{});
+std::cout << rg::distance(cstr);      // prints 5
 ```
 
-The distinction is not "temporary vs named" but **what the pipeline was handed**: an rvalue container is *owned*, a named lvalue is merely *referenced*.
-
-**Solution — return an owning result, or move the container into the pipeline.**
+#### 2. Predicate-delimited ranges become first-class.
+"Predicate-delimited" means the range's end is defined by a condition on the elements — "up to the first negative number", "up to the first null byte" — rather than by a position or a count. An entity is first-class when it can be stored in a variable, passed as an argument, returned from a function, and composed with other things. Before sentinels, a situation like "the elements up to the first negative" was handled in a separate control flow; but after sentinels, it's just a value.
 
 ```cpp
-std::vector<int> make_good() {
-    std::vector<int> local{1, 2, 3, 4};
-    std::vector<int> out;
-    std::ranges::copy(local | rv::filter([](int x) { return x % 2 == 0; }),
-                      std::back_inserter(out));
-    return out;                                        // owns its data
+struct stop_at_negative {
+    friend bool operator==(std::vector<int>::const_iterator it, stop_at_negative) {
+        return *it < 0;
+    }
+};
+
+auto until_negative(std::vector<int> const& v) {   // returned from a function
+    return rg::subrange(v.cbegin(), stop_at_negative{});
 }
 
-auto owning2 = std::move(local) | rv::filter(/* ... */);   // or keep it lazy, by moving
+auto r = until_negative(data);                     // stored in a variable
+rg::fold_left(r, 0, std::plus<>{});                // passed to algorithms  -> 8
+*rg::max_element(r);                               //                       -> 4
+for (int x : r | rv::transform(times10) | rv::reverse) { }   // composed with views
 ```
+There are two payoffs because of this:
+1. Algorithms and adaptors accept it just because it satisfies a range, and no special-casing is needed.
+2. The end of a sequence is discovered *during* the traversal, not before it.
 
-### 3. Ignoring `std::ranges::dangling`
+#### 3. Infinite ranges are representable.
+For instance, the range `rv::iota(0)` has an `std::unreachable_sentinel` for its end; the comparison is always `false`, so the range never finishes. This is only usable in combination with something that stops it.
 
-Range algorithms given an rvalue range refuse to return an iterator into it. The result type becomes `std::ranges::dangling`, which fails at the point of use rather than dangling silently:
+The cost of the generalisation is that `begin()` and `end()` may now have different types, so such a range cannot be handed to a legacy iterator-pair API. Restoring the uniform type is what `rv::common` is for.
+
+### The concept hierarchy
+The standard ranges library, defined in the `<ranges>` header, is an extension and generalization of the standard algorithms and iterator libraries, which makes it more powerful, flexible, composable, and less error-prone.
+
+The ranges library includes:
+* range algorithms (function objects that perform immediate computation and execution of ranges ([eager evaluation](https://share.google/aimode/UnfevoWfIYgsIVtjH)))
+* range adaptors (function objects applied to views that perform computations at a later time when needed ([lazy evaluation](https://nixiz.github.io/yazilim-notlari/2023/09/10/lazy-evaluation-en))).
+
+A `std::ranges` algorithm assumes begin to end by default when passing in a container. There are also variants available for more granular control over a container.
+
+In C++20, `std::ranges` are built on concepts:
+
+`std::ranges::range<T>`
+
+where `T` must have `begin(t)` and `end(t)` that return valid iterators.
+
+And they are refined by the iterator categories:
+* `std::ranges::input_range` → forward‑only, single‑pass.
+* `std::ranges::forward_range` → bidi‑capable, multiple passes.
+* `std::ranges::bidirectional_range` → can traverse backwards
+* `std::ranges::random_access_range` → $O(1)$ random element access
+* `std::ranges::contiguous_range` → elements are laid out contiguously in memory (enables pointer arithmetic)
+* `std::ranges::sized_range` → `size()` is available in $O(1)$
+* `std::ranges::common_range` → `begin(t)` and `end(t)` return the same type (no separate sentinel).
+
+Each concept refines the previous one, progressively requiring more capabilities:
+```
+range
+├── input_range         (single-pass)
+│   └── forward_range   (multi-pass)
+│       └── bidirectional_range
+│           └── random_access_range
+│               └── contiguous_range
+├── sized_range     (O(1) size())   [orthogonal]
+├── common_range    (begin/end same type) [orthogonal]
+├── borrowed_range  (iterators outlive range) [orthogonal]
+└── view            (O(1) move/copy/destroy) [orthogonal]
+```
+These concepts are checked statically at compile time. 
+
+### Three orthogonal properties
+
+* **`sized_range`** — the size is obtainable in $O(1)$ (less time) via `rg::size`. For example, a `std::vector` is sized, but a a `std::forward_list` is not (it has no $O(1)$ `size()` by design), and neither is a predicate-delimited range.
+
+* **`common_range`** — `begin()` and `end()` have the same type. All classical containers are common ranges.
+
+* **`borrowed_range`** — iterators obtained from the range stay valid even after the range object itself is destroyed. This is the property that makes dangling detection possible. A `std::string_view` is borrowed because it never owned the characters in the first place; destroying the view does not touch them. A `std::vector` prvalue is not borrowed because its destructor frees the elements.
+
+It can be said that:
+* All containers and container adaptors  are ranges
+* Non-owning or borrowed containers like `std::string_view`, `std::span`, etc., are borrowed ranges. A range is "borrowed" if iterating over it does not depend on the lifetime of the range object itself.
+
+### The constrained algorithms
+Every classical algorithm has a `std::ranges::` counterpart taking a range:
 
 ```cpp
-std::vector<int> make() { return {1, 2, 3}; }
-
-auto it = std::ranges::find(make(), 2);
-std::cout << *it;
-// error: no match for 'operator*' (operand type is 'std::ranges::dangling')
+std::sort(v.begin(), v.end());     // classical
+rg::sort(v);                       // ranges
+rg::sort(v.begin(), v.end());      // the iterator form still exists
 ```
 
-This is the library working as designed — a compile error instead of undefined behaviour. The mistake is reading it as a defect and casting it away.
+The ranges versions live in `<algorithm>` and `<numeric>` — the same headers — and are function objects rather than function templates. That has a practical consequence: they cannot be found by argument-dependent lookup and cannot be accidentally hijacked by an overload in another namespace, but it also means they must be named explicitly and can be passed around as values.
 
-**Solution — name the range so it outlives the iterator.**
+Ranges algorithms return richer information than their classical counterparts.
 
-```cpp
-auto data = make();
-auto it = std::ranges::find(data, 2);      // a real iterator into `data`
-```
-
-Types that are safe to return iterators from — `std::string_view`, `std::span`, `subrange` —
-opt in via `enable_borrowed_range` and never produce `dangling`.
-
-### 4. Capturing a local by reference in a pipeline's callable
-
-A view stores its predicate or transform by value, but a *reference capture inside* that callable is not protected by anything. The view outliving the captured object is a dangling read on every element:
-
-```cpp
-auto make = [&data] {
-    int threshold = 3;                                  // local to this lambda
-    return data | rv::filter([&threshold](int x) { return x > threshold; });
-};
-auto piped = make();                                    // `threshold` is gone
-for (int x : piped) /* ... */ ;                         // ASan: stack-use-after-return
-```
-
-The same applies to a transform whose function returns a reference to something it created:
-
-```cpp
-auto bad = v | rv::transform([](const std::string& s) -> const std::string& {
-    std::string tmp = s + "!";
-    return tmp;                    // warning: reference to local variable 'tmp' returned
-});                                // ASan: SEGV on dereference
-```
-
-**Solution — capture by value in anything a view stores, and return by value from a transform.**
-
-```cpp
-return data | rv::filter([threshold](int x) { return x > threshold; });   // by value
-auto good = v | rv::transform([](const std::string& s) { return s + "!"; });  // returns a value
-```
-
-### 5. Modifying the source while a view is alive
-
-Views hold iterators or pointers into the source, and several adaptors additionally cache the position of their first element. Mutating the container underneath produces silently wrong
-results:
-
-```cpp
-std::vector<int> v{1, 2, 3};
-auto evens = v | rv::filter([](int x) { return x % 2 == 0; });
-
-for (int x : evens) std::cout << x << " ";     // pass 1: 2
-v.insert(v.begin(), 2);                         // v is now {2, 1, 2, 3}
-for (int x : evens) std::cout << x << " ";     // pass 2: 1 2      <-- correct answer is 2 2
-```
-
-Pass 2 reports the odd number `1` from a filter that keeps only even values. `filter_view` cached "the first survivor is at offset 1"; the insert shifted everything right, so that offset now names a different element. Note this is not a memory error — ASan and UBSan report nothing — it is a wrong answer with no diagnostic anywhere.
-
-Implementation detail worth knowing: libstdc++ caches an *offset* for random-access sources and an *iterator* otherwise, so on a `std::list` the same pattern can dangle outright rather than merely mislead.
-
-**Solution — treat a live view as read-only with respect to its source.** Finish with the view, mutate, then rebuild:
-
-```cpp
-std::vector<int> out;
-std::ranges::copy(v | rv::filter(is_even), std::back_inserter(out));   // done with the view
-v.insert(v.begin(), 2);
-auto evens2 = v | rv::filter(is_even);                                  // fresh view, fresh cache
-```
-
----
-
-## Part II — Laziness and cost
-
-### 6. Ordering `transform` before `filter`
-
-Composition order changes cost, sometimes dramatically. A `filter` downstream of a `transform` must evaluate the transform once to test the predicate and again to yield the element:
-
-```cpp
-std::vector<int> v{1, 2, 3, 4, 5, 6, 7, 8};
-int calls = 0;
-auto expensive = [&calls](int x) { ++calls; return x * x; };
-
-for (int x : v | rv::transform(expensive)
-                | rv::filter([](int y) { return y % 2 == 0; })) (void)x;
-// 4 elements yielded, calls == 12
-```
-
-**Solution — filter on the cheap input first, when the predicate permits.** Here `x*x` is even exactly when `x` is even, so the predicate can test the original value:
-
-```cpp
-for (int x : v | rv::filter([](int y) { return y % 2 == 0; })
-                | rv::transform(expensive)) (void)x;
-// same 4 elements, calls == 4
-```
-
-Same answer, a third of the work. When the predicate genuinely needs the transformed value, materialise the transform once rather than filtering over it repeatedly.
-
-### 7. Putting impure functions in a lazy pipeline
-
-Because views recompute, a function with side effects or internal state produces different results depending on how many times each element is visited — and §6 shows that count is not obvious from reading the pipeline.
-
-```cpp
-int n = 0;
-auto bad = v | rv::transform([&n](int x) { return x + n++; });   // depends on call count
-```
-
-Two traversals of `bad` yield different sequences, and an adaptor that probes an element twice corrupts the result outright. Counters, logging, caching, and lazy initialisation inside a `transform` or `filter` all fall into this trap.
-
-**Solution — keep pipeline callables pure.** Where a side effect is genuinely required, put it in a terminal loop or `std::ranges::for_each`, never inside a view:
-
-```cpp
-std::ranges::for_each(v | rv::filter(pred), [&](int x) { log(x); });   // effect at the end
-```
-
-### 8. Expecting a view to remember its work
-
-A view memoises nothing except, in a few adaptors, the position of `begin()`. Traversing twice re-runs every predicate and every transform:
-
-```cpp
-std::vector<int> v{1, 2, 3, 4};
-int preds = 0;
-auto big = v | rv::filter([&preds](int x) { ++preds; return x > 2; });
-
-for (int x : big) (void)x;      // preds == 4   (predicate ran on all four elements)
-for (int x : big) (void)x;      // preds == 6   (begin() cached; the rest re-ran)
-```
-
-Note also that the *first* `begin()` on a `filter_view` is **O(n)**: it must scan for the first element that satisfies the predicate. A pipeline whose `begin()` is taken repeatedly pays this each time.
-
-**Solution — materialise anything traversed more than once**, exactly as in §1.
-
-### 9. Rebuilding a pipeline inside a loop
-
-A fresh pipeline has a fresh (empty) cache, so re-creating one per iteration discards all the work of the previous pass:
-
-```cpp
-std::vector<int> v(1000, 1); v[999] = 9;
-int preds = 0;
-auto pred = [&preds](int x) { ++preds; return x > 5; };
-
-for (int k = 0; k < 3; ++k) { auto f = v | rv::filter(pred); (void)*f.begin(); }
-// preds == 3000   — the O(n) scan for the first survivor runs three times
-
-auto f = v | rv::filter(pred);
-for (int k = 0; k < 3; ++k) (void)*f.begin();
-// preds == 1000   — one scan, then the cached position
-```
-
-**Solution — hoist the pipeline out of the loop**, or materialise it once before looping. Building a view is cheap; *starting* one is not always cheap.
-
----
-
-## Part III — Mutation
-
-### 10. Writing through `filter_view` so the predicate stops holding
-
-Elements can be modified through a `filter_view`, but writing a value that no longer satisfies the predicate is explicitly undefined behaviour. It is worth seeing, because it can look harmless:
-
-```cpp
-std::vector<int> v{1, 2, 3, 4};
-auto evens = v | rv::filter([](int x) { return x % 2 == 0; });
-
-for (int x : evens) std::cout << x << " ";     // 2 4
-v[1] = 7;                                       // the cached first survivor stops being even
-for (int x : evens) std::cout << x << " ";     // 7 4   <-- an odd number from an "evens" view
-```
-
-This is the same cached-position mechanism as §5, reached by writing rather than inserting.
-
-**Solution — do not modify elements through, or underneath, a live `filter_view`.** A plain loop is clearer and has no hidden state:
-
-```cpp
-for (int& x : v) if (x % 2 == 0) x += 1;                   // no view, no cache
-auto evens2 = v | rv::filter([](int x){ return x % 2 == 0; });   // rebuild afterwards
-```
-
-### 11. Binding `auto&` to a `transform_view` element
-
-A `transform` that returns by value yields prvalues, so there is no lvalue to bind:
-
-```cpp
-for (auto& x : v | rv::transform([](int y) { return y * 2; })) x = 0;
-// error: cannot bind non-const lvalue reference of type 'int&' to an rvalue of type 'int'
-```
-
-**Solution — use `auto&&` (or `auto`) when the element type is not known to be a reference.**
-
-```cpp
-for (auto&& x : v | rv::transform([](int y) { return y * 2; })) std::cout << x;
-```
-
-`auto&&` is the correct default for range-`for` over any pipeline: it binds to references where they exist and to prvalues where they do not. Writing *through* a transform requires the function itself to return a reference, which reintroduces the lifetime hazard of §4.
-
-### 12. Expecting to write through a const source or `views::as_const`
-
-Constness propagates through a pipeline, and the diagnostics arrive far from the cause:
-
-```cpp
-const std::vector<int> v{1, 2, 3};
-for (auto& x : v | rv::filter([](int y) { return y % 2; })) x = 0;
-// error: assignment of read-only reference 'x'
-
-auto c = v | rv::as_const;                                   // C++23
-std::ranges::fill(c, 0);
-// error: no match for call to '(const std::ranges::__fill_fn)'
-```
-
-**Solution — decide deliberately whether a pipeline is a read or a write path.** Use a non-const source for mutation; use `as_const` precisely when a pipeline should be *prevented* from writing — that is the feature, not an obstacle.
-
----
-
-## Part IV — Type-system and interop
-
-### 13. Passing a view as `const&`
-
-The caching in §5 and §10 is why `filter_view::begin()` is non-`const`, which makes the whole view non-const-iterable. A generic helper taking `const auto&` therefore fails to compile:
-
-```cpp
-void print(const auto& r) { for (auto x : r) std::cout << x; }
-
-auto f = v | rv::filter([](int x) { return x % 2; });
-print(f);
-// error: passing 'const std::ranges::filter_view<...>' as 'this' argument discards qualifiers
-```
-
-`drop_while_view`, `split_view`, and several others behave identically.
-
-**Solution — take views by value or by forwarding reference.** Views are cheap to copy by design,
-so neither is a pessimisation:
-
-```cpp
-void print(std::ranges::input_range auto&& r) { for (auto&& x : r) std::cout << x; }
-// or: template <std::ranges::view V> void print(V r) { ... }
-```
-
-### 14. Sorting a view that cannot be sorted
-
-Two distinct failures share one symptom — a long error naming `__sort_fn`:
-
-```cpp
-auto f = v | rv::filter([](int x) { return x > 1; });
-std::ranges::sort(f);        // error: no match for call to '(const std::ranges::__sort_fn)'
-```
-
-`filter_view` is at best **bidirectional** — locating the *n*th survivor requires testing every element in between — while `sort` requires random access.
-
-```cpp
-auto t = v | rv::transform([](int x) { return x * 2; });
-std::ranges::sort(t);        // error: no match for call to '(const std::ranges::__sort_fn)'
-```
-
-`transform_view` yields computed prvalues, so there is nothing to write back into: readable, never writable (§11).
-
-**Solution — sort the container, or materialise first.**
-
-```cpp
-std::ranges::sort(v);                                // sort the real storage
-
-std::vector<int> tmp;                                 // or take a snapshot and sort that
-std::ranges::copy(v | rv::transform(f), std::back_inserter(tmp));
-std::ranges::sort(tmp);
-```
-
-### 15. Calling `size()` on a pipeline that has no size
-
-A filtered range cannot report its length without running the predicate over everything, so it is deliberately not a `sized_range`:
-
-```cpp
-auto f = v | rv::filter([](int x) { return x % 2; });
-std::cout << std::ranges::size(f);
-// error: no match for call to '(const std::ranges::__cust_access::_Size)'
-```
-
-**Solution — use `std::ranges::distance` when an O(n) count is acceptable**, or materialise:
-
-```cpp
-auto n = std::ranges::distance(f);        // O(n), and says so at the call site
-```
-
-The same applies to `view_interface`'s `operator[]`, `back()`, and `empty()` in some cases: they exist only when the underlying iterators can support them.
-
-### 16. Feeding a view to a pre-C++20 algorithm
-
-Classic algorithms require `begin()` and `end()` to be the *same type*. Many views end with a sentinel instead, so the call does not match:
-
-```cpp
-auto tw = v | rv::take_while([](int x) { return x > 0; });
-std::accumulate(tw.begin(), tw.end(), 0);
-// error: no matching function for call to 'accumulate(__normal_iterator<...>, take_while_view<...>::_Sentinel<true>, int)'
-```
-
-**Solution — adapt with `rv::common`, or prefer the `std::ranges::` algorithm.**
-
-```cpp
-auto c = v | rv::take_while([](int x) { return x > 0; }) | rv::common;
-std::accumulate(c.begin(), c.end(), 0);              // 10
-```
-
-Note what `common` does and does not do: it makes the two types agree, but it does **not** upgrade the iterator category. `std::sort` on a `common`-adapted `take_while_view` still fails, because the iterators remain non-random-access. Where a `std::ranges::` equivalent exists, it accepts the sentinel form directly and is the better choice.
-
-### 17. Assuming an algorithm's result indexes the container
-
-An algorithm run over a view returns an iterator **into the view**, whose position bears no relation to the position in the underlying container:
+#### Algorithms that trim return a subrange.
+The `rg::remove_if` does not resize anything — it cannot, since it has no access to the container — but it returns the *junk tail* as a subrange, which pairs directly with `erase`:
 
 ```cpp
 std::vector<int> v{1, 2, 3, 4, 5, 6};
-auto f = v | rv::filter([](int x) { return x % 2 == 0; });
-auto it = std::ranges::find(f, 4);
-
-std::ranges::distance(f.begin(), it);        // 1   — second element of the filtered view
-std::ranges::distance(v.begin(), it.base()); // 3   — fourth element of the container
+auto junk = rg::remove_if(v, [](int x) { return x % 2; });
+// v.size() is still 6; junk covers the 3 discarded slots
+v.erase(junk.begin(), junk.end());
+// v is now {2, 4, 6}
 ```
 
-Using the first number to index `v` silently reads the wrong element.
+This is the classical erase-remove idiom with a friendlier spelling. Discarding the return value is a silent no-op and one of the most common ranges bugs.
 
-**Solution — call `.base()` to recover the underlying iterator** before measuring against the container, as above. (`filter_view::iterator`, `transform_view::iterator`, and the other adaptor iterators all provide it.)
-
----
-
-## Part V — Individual adaptors
-
-### 18. Expecting `split` to produce strings
-
-`rv::split` yields **subranges over the original characters**, not `std::string` objects. There is no `operator<<` for them and no implicit conversion:
+#### Algorithms with two cursors return a struct.
+The `rg::copy` returns `{in, out}`; `rg::minmax` returns `{min, max}`:
 
 ```cpp
-std::string text = "alpha,beta,gamma";
-for (auto part : text | rv::split(',')) {
-    std::string piece(part.begin(), part.end());     // explicit materialisation
-    std::cout << "[" << piece << "]";                 // [alpha][beta][gamma]
+auto res = rg::copy(src, dst.begin());   // res.in, res.out
+auto [mn, mx] = rg::minmax(nums);        // structured binding
+```
+
+#### Algorithms returning iterators guard against dangling.
+If the argument is an rvalue range that is *not* a `borrowed_range`, the returned iterator would dangle immediately — so the library returns the empty tag type `rg::dangling` instead:
+
+```cpp
+auto make = [] { return std::vector<int>{4, 8, 15}; };
+
+auto d = rg::find(make(), 8);            // decltype(d) is rg::dangling
+// *d;                                   // does not compile — by design
+
+auto named = make();
+auto ok = rg::find(named, 8);            // a real iterator
+std::cout << *ok;                        // 8
+
+auto sv = rg::find(std::string_view{"abc"}, 'b');   // fine: string_view is borrowed
+```
+
+This converts a class of use-after-free bugs into compile errors. The diagnostic reads roughly `no match for operator*(std::ranges::dangling)`, which is opaque on first encounter but unambiguous once recognised.
+
+#### Folds
+The `std::accumulate`, however, has no direct ranges counterpart; C++23 instead introduced a family of folds with clearer semantics:
+
+```cpp
+rg::fold_left(v, 0, std::plus<>{});                  // 55 for 1..10
+rg::fold_left_first(v, std::plus<>{});               // std::optional — empty-range safe
+rg::fold_right(v, 0, std::plus<>{});
+rg::fold_left_with_iter(v, 0, std::plus<>{});        // also returns the end iterator
+```
+
+Folds take no projection parameter, so a projection is expressed by piping through
+`rv::transform`:
+
+```cpp
+rg::fold_left(staff | rv::transform(&Employee::salary), 0, std::plus<>{});   // 470
+```
+
+| Category | Algorithms |
+|---|---|
+| Non-modifying | `all_of` `any_of` `none_of` `for_each` `for_each_n` `count` `count_if` `mismatch` `equal` `lexicographical_compare` `find` `find_if` `find_if_not` `find_end` `find_first_of` `adjacent_find` `search` `search_n` `contains`† `contains_subrange`† `find_last`† `find_last_if`† `starts_with`† `ends_with`† `fold_left`† `fold_right`† `fold_left_first`† |
+| Modifying | `copy` `copy_if` `copy_n` `copy_backward` `move` `move_backward` `fill` `fill_n` `generate` `generate_n` `transform` `replace` `replace_if` `replace_copy` `swap_ranges` `reverse` `reverse_copy` `rotate` `rotate_copy` `shift_left`† `shift_right`† `sample` `shuffle` `unique` `unique_copy` `remove` `remove_if` `remove_copy` `remove_copy_if` `iota`† |
+| Partitioning | `is_partitioned` `partition` `stable_partition` `partition_copy` `partition_point` |
+| Sorting | `sort` `stable_sort` `partial_sort` `partial_sort_copy` `is_sorted` `is_sorted_until` `nth_element` |
+| Binary search | `lower_bound` `upper_bound` `equal_range` `binary_search` |
+| Set operations | `merge` `inplace_merge` `includes` `set_union` `set_intersection` `set_difference` `set_symmetric_difference` |
+| Heap | `push_heap` `pop_heap` `make_heap` `sort_heap` `is_heap` `is_heap_until` |
+| Min/max | `min` `max` `minmax` `min_element` `max_element` `minmax_element` `clamp` |
+| Permutation | `next_permutation` `prev_permutation` `is_permutation` |
+
+## Views
+A *view* is a range that is cheap to copy, move, and destroy — formally, one whose copy and move operations are $O(1)$. Views do not own the elements they present (with one deliberate exception).
+
+A view stores where the data lives and what to do with it, not the data.
+
+```
+        view                          underlying container
+   +---------------+                 +---+---+---+---+---+
+   | ptr to vector | --------------> | 1 | 2 | 3 | 4 | 5 |
+   | predicate     |                 +---+---+---+---+---+
+   +---------------+
+    16 bytes                          the actual storage
+```
+
+The namespace alias `std::views` is provided as a shorthand for `std::ranges::views`. A view is a lightweight range that works on a container without making internal data copies, unlike a range. A view provides a "window" into an existing range via reference semantics, i.e., it is memory efficient and mutable. In other words, it does not copy the elements of the container, and modifications to the underlying container are reflected in the view and vice-versa.
+
+The view adapters are defined under `std::views`, such as `std::views::filter`, `std::views::transform`, etc., and don’t immediately process data. Instead, they create a view — a lightweight object that does not own or copy data from the container it works on, but just defines how elements should be seen. This allows for lazy evaluation, where the operations are defined immediately but logic is only executed when we actually iterate over the final result. For more on lazy evaluation in C++, read "Functional Programming in C++" by Ivan Cukic or "Learning C++ Functional Programming" by Wisnu Anggoro.
+
+Custom views can also be created by inheriting from `std::ranges::view_interface`.
+```cpp
+template<std::ranges::view V>
+class my_view : public std::ranges::view_interface<my_view<V>> {
+    V base_;
+public:
+    my_view() = default;
+    my_view(V base) : base_(std::move(base)) {}
+
+    auto begin() { return std::ranges::begin(base_); }
+    auto end()   { return std::ranges::end(base_); }
+};
+```
+
+A view must satisfy:
+```cpp
+template<typename V>
+concept view = std::ranges::range<V>
+            && std::movable<V>
+            && std::ranges::enable_view<V>; // opt-in marker
+```
+And additionally, all these operations must be $O(1)$:
+* Move construction
+* Move assignment
+* Destruction
+* Copy construction (if supported)
+* Copy assignment (if supported)
+This $O(1)$ constraint is the essential rule: a view must **never** copy the underlying data. It only holds a reference/pointer/iterator to it.
+
+Consider a traditional STL example that squares even numbers:
+```cpp
+std::vector<int> data = {1, 2, 3, 4};
+
+auto is_even = [](int x) { return x % 2 == 0; };
+auto square = [](int x) { return x * x; };
+
+// STEP 1: Filter (Eagerly processes entire vector into memory)
+std::vector<int> evens;
+std::copy_if(data.begin(), data.end(), std::back_inserter(evens), is_even);
+
+// STEP 2: Transform (Eagerly processes the new vector into memory)
+std::vector<int> squares;
+std::transform(evens.begin(), evens.end(), std::back_inserter(squares), square);
+
+// STEP 3: Consumer
+for (int x : squares) {
+    std::cout << x << " "; 
+}
+```
+This approach:
+* Requires intermediate containers
+* Separates steps instead of expressing a continuous flow
+* Can cause memory and performance overhead
+
+The above example would then look like:
+```cpp
+std::vector<int> data = {1, 2, 3, 4};
+
+auto is_even = [](int x) { return x % 2 == 0; };
+auto square = [](int x) { return x * x; };
+
+// The Consumer pulls elements directly through the pipeline on the go
+for (int x : (data | std::views::filter(is_even) | std::views::transform(square))) {
+    std::cout << x << " "; 
+}
+```
+This reads almost like an English sentence:
+Take a list of numbers → keep only even numbers → square them.
+
+The general pattern looks like this:
+```
+Data | View_Adapter | Action
+```
+* Data → The original source of elements (for example, a `std::vector` of users).
+* View Adapter → Describes how the data should be processed.
+* Action → The final step where the result is actually consumed (for example, printing or storing values).
+
+This diagram is the one worth memorising:
+```
+   for (int x : (data | filter(is_even) | transform(square)))
+
+   The consumer pulls. Each request travels UP the pipeline,
+   and one element travels back DOWN.
+
+        consumer (range-for)
+              |  "next element, please"
+              v
+        +-------------+
+        |  transform  |   asks its source for one element, squares it
+        +-------------+
+              |  "next element, please"
+              v
+        +-------------+
+        |   filter    |   asks its source repeatedly until one passes
+        +-------------+
+              |  "next element, please"
+              v
+        +-------------+
+        |    data     |   yields 1, then 2, then 3, ...
+        +-------------+
+
+   Trace for data = {1,2,3,4}:
+     pull -> filter asks data: 1 (odd, reject), 2 (even, accept)
+          -> transform squares 2  -> consumer receives 4
+     pull -> filter asks data: 3 (odd, reject), 4 (even, accept)
+          -> transform squares 4  -> consumer receives 16
+     pull -> filter asks data: exhausted -> pipeline ends
+```
+
+Here,
+* only the pipeline structure is built.
+* at the time of using `result` (e.g., for printing each element of `result`), each view’s iterator advances the base and applies the filter/transform on‑the‑fly.
+
+Nothing is buffered between stages. No intermediate container exists at any point. One big design win is that composition is natural and efficient.
+
+This contract ensures that:
+* Many views can be chained without performance collapse.
+* Views can be passed cheaply (by value) into algorithms or functions
+
+Instead of calling algorithms separately and passing iterator pairs each time, operations can now be built in a pipeline style, similar to how data flows through stages. This is called as a "pipeable" workflow.
+
+The pipe operator `|` is used to chain range adaptors. It was chosen deliberately to evoke the Unix pipeline metaphor, where data flows through a series of transformations, each receiving the output of the previous one. The semantic contract of the pipe operator is that the right-hand side is always applied to the left-hand side, producing a new range without modifying the original. This is done using *proxy iterators*.
+
+The first adaptor in the pipeline returns a range structure whose begin iterator will be a smart proxy iterator that points to the first element in the source collection that satisfies the given predicate. And the end iterator will be a proxy for the original collection’s end iterator. The only thing the proxy iterator needs to do differently than the iterator from the original collection is to point only at the elements that satisfy the given predicate.
+
+In a nutshell, every time the proxy iterator is incremented, it needs to find the next element in the original collection that satisfies the predicate. With the proxy iterator, a new temporary collection need not be created. Only a new 'view' of the existing data is created. This new range is a lazy view — it wraps the original rather than copying it. This view, instead of showing original elements as they are, shows them processed. The next adaptor in the pipeline sees only this view.
+
+Consider another example that extracts the names of first three females:
+```cpp
+std::vector<std::string> names = people | filter(is_female)
+                                        | transform(name)
+                                        | take(3);
+```
+The type of `names` is something like:
+```
+take_view
+  → transform_view
+     → filter_view
+        → ref_view
+            → vector
+```
+This is a nested type — a compile-time description of the computation.
+
+This time, the results are stored instead of being comsumed directly, so the diagram now looks like this:
+```
+   ── At the assignment, NOTHING runs. ──────────────────────────────
+   The pipeline itself is a lightweight object holding: a pointer to
+   `people`, copies of `is_female` and `name`, and the limit (3).
+   Zero elements are processed while building this recipe.
+
+        +-------------------------------------------+
+        |  pipeline = take_view{                    |
+        |               transform_view{             |
+        |                 filter_view{              |
+        |                   ref_view{ &people },    |
+        |                   is_female },            |
+        |                 name },                   |
+        |               3 }                         |
+        +-------------------------------------------+
+                     a recipe, not a result
+
+
+   ── Later, when something iterates `names`: ──────────────────────
+   The vector constructor pulls elements to fill itself. Each request
+   travels UP the pipeline, and one name travels back DOWN.
+
+        consumer  (std::vector construction)
+              |  "next name, please"
+              v
+        +-------------+
+        |   take(3)   |   checks count. If < 3, asks its source,
+        |             |   otherwise signals the end.
+        +-------------+
+              |  "next name, please"
+              v
+        +-------------+
+        | transform   |   asks its source for one Person,
+        |   (name)    |   applies the name function to it.
+        +-------------+
+              |  "next Person, please"
+              v
+        +-------------+
+        |   filter    |   asks its source repeatedly, testing is_female,
+        | (is_female) |   until one passes.
+        +-------------+
+              |  "next Person, please"
+              v
+        +-------------+
+        |   people    |   yields adam, then bea, then carl, ...
+        +-------------+
+
+   Trace for people = { adam(M), bea(F), carl(M), diana(F), evan(M), fiona(F), george(M) }:
+
+     pull -> take(3) allows (count: 0)
+          -> filter asks people: adam (M -> reject)
+                                 bea  (F -> accept)
+          -> transform calls name(bea)       -> vector receives "bea"
+
+     pull -> take(3) allows (count: 1)
+          -> filter asks people: carl (M -> reject)
+                                 diana(F -> accept)
+          -> transform calls name(diana)     -> vector receives "diana"
+
+     pull -> take(3) allows (count: 2)
+          -> filter asks people: evan (M -> reject)
+                                 fiona(F -> accept)
+          -> transform calls name(fiona)     -> vector receives "fiona"
+
+     pull -> take(3) intercepts (count: 3 reached)
+          -> signals exhausted without asking transform/filter
+          -> pipeline ends. `george` is never even looked at!
+
+   Verified call counts to extract exactly 3 names:
+     is_female : 6   (stops instantly after fiona; george is skipped)
+     name      : 3   (only the 3 accepted females are projected)
+```
+
+The flow is as follows:
+1. When `people | filter(is_female)` is evaluated, nothing happens other than a new view being created. Not a single person is accessed from the `people` collection, except potentially to initialize the iterator to the source collection to point to the first item that satisfies the `is_female` predicate.
+2. This view is passed to `| transform(name)`. The only thing that happens is that a new view is created. Again, neither a single person is accessed nor the `name` function is called on any of them.
+3. Then, `| take(3)` is applied to that result. Again, it creates a new view and nothing else.
+4. A vector of strings is constructed from the view which was obtained as the result of the `| take(3)` transformation. To create a vector, the values to put in must be known. This step goes through the view and accesses each of its elements. When the vector of names is to be constructed from the range, all the values in the range have to be evaluated. 
+
+[![Screenshot-2026-04-14-at-7-51-49-AM.png](https://i.postimg.cc/pXY0yMb2/Screenshot-2026-04-14-at-7-51-49-AM.png)](https://postimg.cc/9r0PNSQS)
+When accessing an element from the view, the view proxies the request to the next view in the composite transformation, or to the collection. Depending on the type of the view, it may
+transform the result, skip elements, traverse them in a different order, and so on.
+
+For each element added to the vector, the following things happen:
+1. A dereference operator is called on the proxy iterator that belongs to the range view returned by take, i.e., `take_view::iterator::operator*()`. The proxy iterator created by take passes the request to the proxy iterator created by `transform`.
+2. Which calls `transform_view::iterator::operator*()`. This iterator just passes on the request.
+3. It calls `filter_view::iterator::operator*()`. The proxy iterator defined by the `filter` transformation is dereferenced. It goes through the source collection and finds and returns the first person that satisfies the `is_female` predicate. This is the first time any of the persons in the collection are accessed, and the first time the `is_female` function is called.
+4. This iterator advances until predicate is satisfied. The person retrieved by dereferencing the `filter` proxy iterator is passed to the `name` function, and the result is returned to the `take` proxy iterator, which passes it on to be inserted into the `names` vector. When an element is inserted, it goes to the next one, and then the next one, until the end is reached. 
+5. It finally calls `ref_view::iterator::operator*()`, which reads from the vector, where the final value flows back up through `transform`.
+
+This is lazy evaluation at work. Even though the code is shorter and more generic than the equivalent handwritten for loop, it does exactly the same thing and has no performance penalties. Each element of the underlying container is processed on demand, one at a time, with the full pipeline fused together. The compiler typically inlines everything into a tight loop.
+
+From the address‑space perspective:
+* `names` owns a contiguous buffer.
+* `filter_view` stores a pointer‑like view into this buffer (`m_base` ≈ `names.data()` and `names.size()`).
+* `transform_view` stores only:
+    * Another pointer‑like base iterator.
+    * A small function‑object `fn` (likely just a `size_t`‑sized lambda).
+* `take_view` stores:
+    * A pointer‑like base iterator.
+    * Two `size_t`s: `m_count`, `m_max`.
+
+No extra storage is allocated for the intermediate sequences.
+
+Instead, the machine code for
+```cpp
+for (int x : pipeline) { ... }
+```
+can be optimized into a loop that conceptually looks like:
+```cpp
+int count = 0;
+for (auto it = v.begin(); it != v.end() && count < 3; ++it) {
+    if (*it <= 0) continue;
+    int x = *it * *it;
+    // ... use x
+    ++count;
+}
+```
+The compiler inlines `filter_view::iterator::operator++()` and `transform_view::iterator::operator*()` across the adaptor boundaries, so the indirection cost is very low.
+
+Even though the model is deep, the compiler:
+* inlines `operator*()` and `operator++()` through the layers.
+* recognize that `m_pred` and `m_fn` are simple functions and keep them inline.
+* collapses the whole chain into a tight loop with no extra allocation per `|`.
+
+This keeps the pipeline design lazy and composable, while giving owned storage where needed.
+
+Views compute nothing when constructed. Work happens only when an iterator is advanced or dereferenced, and only for the elements actually reached. Elements are pulled through the pipeline **one at a time**, not stage by stage.
+
+Chaining pipes creates a tree of wrapper objects rooted at the original range. Each layer adds a small constant amount of overhead per element access. The C++ optimizer can typically inline through all these layers and produce machine code that is nearly as efficient as a hand-written loop with all the logic inlined, particularly with modern compilers and optimization levels.
+
+It must be kept in mind that the full type of a deeply composed pipeline can be extraordinarily long and complex. If a compilation error is generated in a pipeline expression, the error message will typically dump this full nested type, which can be hundreds or thousands of characters long. Learning to read these errors requires practice and a clear mental model of which adaptor corresponds to which layer. Working from the inside out makes these errors tractable. The `auto` keyword is essential when working with adapted ranges precisely because the types are so complex and unwriteable by hand. The `auto` deduced type will be the full nested (hidden) type, which is correct and efficient. Also, the lifetime of the original range must exceed the lifetime of the view.
+
+### Materialization
+A view is non‑owning, i.e., it does not store, copy, or manage the lifecycle of the actual data it processes. It merely acts as a "lens" or a reference to data in the range that already exists somewhere else in memory. Hence, it must be ensured that the underlying range outlives the view.
+```cpp
+auto make_view() {
+    std::vector<int> local = {1, 2, 3};
+    auto v = local | std::views::filter([](int x) { return x > 1; });
+    return v;   // DANGER: local is destroyed when function returns
+}
+
+for (int x : make_view()) { ... } // Undefined behavior!
+```
+The code above demonstrates a "dangling view." When we try to use the result, the vector `v` is already gone, leading to undefined behavior.
+
+To avoid this situation, either:
+* Keep the base alive:
+```cpp
+std::vector<int> data = {1, 2, 3};
+auto pipeline = data | std::views::filter(...);
+for (int x : pipeline) { }   // OK
+```
+* Or store the result:
+```cpp
+std::vector<int> stored;
+std::ranges::copy(pipeline, std::back_inserter(stored));
+```
+
+* Or materialize with `std::ranges::to` (Since C++23 and GCC v16)
+```cpp
+std::vector<int> vec;
+// Works from C++23 and GCC v16 onwards
+auto result_vec = std::ranges::to<std::vector<int>>(vec);
+```
+It deduces the element type, reserves capacity when the source is sized, and works recursively for nested containers. It is the correct default when available.
+
+A view is not necessarily read-only. When the underlying reference type is a non-const lvalue reference, assignment through the view modifies the source:
+
+```cpp
+std::vector<int> w{1, 2, 3, 4, 5, 6};
+
+for (int& x : w | rv::filter([](int n) { return n % 2 == 0; }))
+    x = 0;
+// w is now {1, 0, 3, 0, 5, 0}
+
+rg::fill(w | rv::take(2), 7);
+// w is now {7, 7, 3, 0, 5, 0}
+```
+
+Mutating *through* a `filter_view` in a way that changes whether elements satisfy the predicate is undefined behaviour — the standard explicitly forbids it. Writing `0` above is legal only because the code does not subsequently use that view.
+
+#### `views::all`, `ref_view`, and `owning_view`
+
+Piping a container into an adaptor first converts it to a view. That conversion is `rv::all`, and its result type is spelled `rg::views::all_t<R>`:
+
+```
+   lvalue container  ──rv::all──►  ref_view<C>      holds C*        (8 bytes, no copy)
+   rvalue container  ──rv::all──►  owning_view<C>   holds C by move (takes ownership)
+   already a view    ──rv::all──►  itself           (copied; O(1) by definition)
+```
+### The catalog of views
+#### Factories — views built from nothing
+
+Factories are called directly rather than piped into.
+
+```cpp
+rv::empty<int>             // an empty range of int
+rv::single(42)             // exactly one element:            42
+rv::iota(1, 6)             // half-open integer sequence:     1 2 3 4 5
+rv::iota(1)                // UNBOUNDED: 1 2 3 4 ...
+rv::repeat(7)              // C++23, unbounded:               7 7 7 ...
+rv::repeat(7, 2)           // C++23, bounded:                 7 7
+rv::istream<int>(stream)   // pulls ints from a stream until it fails
+```
+
+```
+   iota(1, 6)          1 ─ 2 ─ 3 ─ 4 ─ 5 ─┤
+   iota(1)             1 ─ 2 ─ 3 ─ 4 ─ 5 ─ 6 ─ ...  (no end; use take/take_while)
+   repeat(7, 2)        7 ─ 7 ─┤
+   single(42)          42 ─┤
+   empty<int>          ┤
+```
+
+`rv::iota` works with any incrementable type, including iterators — `rv::iota(v.begin(),
+v.end())` yields the iterators themselves, occasionally useful.
+
+#### Selection — choosing which elements pass
+
+```cpp
+std::vector<int> v{1, 2, 3, 4, 5, 6, 7, 8};
+
+v | rv::take(3)                                       // 1 2 3
+v | rv::take(99)                                      // 1 2 3 4 5 6 7 8   (clamps, no UB)
+v | rv::drop(5)                                       // 6 7 8
+v | rv::take_while([](int x) { return x < 5; })       // 1 2 3 4
+v | rv::drop_while([](int x) { return x < 5; })       // 5 6 7 8
+v | rv::filter([](int x) { return x % 2 == 0; })      // 2 4 6 8
+v | rv::stride(3)                                     // 1 4 7          (C++23)
+rv::counted(v.begin(), 3)                             // 1 2 3
+```
+
+```
+   input        1  2  3  4  5  6  7  8
+
+   take(3)      1  2  3
+   drop(5)                        6  7  8
+   take_while   1  2  3  4                  stops at the FIRST failure
+   drop_while                  5  6  7  8   drops the leading run only
+   filter          2     4     6     8      skips failures, keeps going
+   stride(3)    1        4        7         every 3rd, always includes the first
+```
+
+The `take_while` / `filter` distinction repays attention. Given `{1, 2, 9, 3, 4}` and the
+predicate `x < 5`, `take_while` yields `1 2` and stops at `9`; `filter` yields `1 2 3 4`.
+
+#### Transformation — changing the elements
+
+```cpp
+v | rv::transform([](int x) { return x * x; })   // 1 4 9 16 25 36 49 64
+v | rv::reverse                                  // 8 7 6 5 4 3 2 1
+
+std::vector<std::string> words{"alpha", "beta", "gamma"};
+words | rv::transform(&std::string::size)        // 5 4 5
+```
+
+`rv::transform` accepts anything invocable, including pointers-to-member, since it uses the
+`std::invoke` protocol.
+
+```
+   transform(f)     x0      x1      x2
+                     |       |       |
+                    f(x0)   f(x1)   f(x2)      element count unchanged
+
+   reverse          x0  x1  x2   ──►   x2  x1  x0   (requires bidirectional)
+```
+
+#### Flattening and splitting
+
+```cpp
+std::vector<std::vector<int>> nested{{1, 2}, {}, {3, 4, 5}};
+nested | rv::join                                    // 1 2 3 4 5
+
+std::vector<std::string> words{"alpha", "beta", "gamma"};
+words | rv::join_with('-')       // C++23; yields CHARS: a l p h a - b e t a - g a m m a
+
+std::string_view{"ab,cd,ef"} | rv::split(',')        // {ab} {cd} {ef}
+std::string_view{"a::b::c"} | rv::split(std::string_view{"::"})   // {a} {b} {c}
+std::string_view{"ab,cd"} | rv::lazy_split(',')      // {ab} {cd}
+```
+
+```
+   join          [ [1,2] , [] , [3,4,5] ]  ──►  1 2 3 4 5
+                        one level removed; empty inner ranges vanish
+
+   join_with('-')  [ "ab", "cd" ]  ──►  a b - c d      (separator interleaved)
+
+   split(',')    "ab,cd,ef"  ──►  ["ab"] ["cd"] ["ef"]
+                 each token is a SUBRANGE, not a string or string_view
+```
+
+Two important details.
+
+**Tokens are subranges, not strings.** Converting is a two-step incantation that appears in
+essentially every real use:
+
+```cpp
+for (auto token : text | rv::split(',')) {
+    std::string_view sv(token.begin(), token.end());   // works in C++20 and later
+    // C++23 also allows: std::string_view sv(token);
 }
 ```
 
-**Solution — construct explicitly**, as above; use `std::string_view(part.begin(), part.end())` to avoid the copy for contiguous input, or `part | std::ranges::to<std::string>()` in C++23
-(GCC 14+). Note also that C++20's `split_view` differs from `lazy_split_view`: the former requires a forward range and preserves it, the latter works on input ranges but yields non-common inner ranges.
+**`split` versus `lazy_split`.** As originally standardised in C++20, `split_view` produced
+tokens that were themselves lazy ranges — nearly unusable for the common case of splitting a
+string. Paper P2210R2 fixed this *as a defect report*, retargeting `views::split` to produce
+subranges over forward ranges, and renaming the original behaviour to `views::lazy_split`.
+Use `split` by default; `lazy_split` is for input ranges that cannot be re-traversed.
 
-### 19. Traversing an input range twice
-
-Views over input streams are single-pass. A second traversal silently yields nothing, because the first consumed the stream:
-
-```cpp
-std::istringstream in("1 2 3");
-auto nums = std::ranges::istream_view<int>(in);
-
-for (int x : nums) { /* 3 elements */ }
-for (int x : nums) { /* 0 elements */ }     // exhausted, no error, no diagnostic
-```
-
-**Solution — materialise once and reuse the result**, or re-create the stream for a second pass. Any pipeline built on an input range is consumable, not repeatable — and the compiler will not warn.
-
-### 20. Building an unbounded pipeline without a bound
-
-`rv::iota(0)` is infinite. Traversing it, sizing it, or materialising it does not terminate:
+#### Multi-range adaptors (C++23)
 
 ```cpp
-for (int x : rv::iota(0)) std::cout << x;          // never returns
+std::vector<std::string> words{"alpha", "beta", "gamma"};
+std::vector<int> scores{90, 80, 70};
+
+rv::zip(words, scores)                        // alpha=90 beta=80 gamma=70
+rv::zip_transform(std::plus<>{}, v, v)        // 2 4 6 8 10 12 14 16
+words | rv::enumerate                         // 0:alpha 1:beta 2:gamma
+v | rv::adjacent<2>                           // (1,2) (2,3) (3,4) (4,5) ...
+v | rv::adjacent_transform<2>(std::plus<>{})  // 3 5 7 9 11 13 15
+rv::cartesian_product(std::vector{1,2}, std::string_view{"xy"})   // 1x 1y 2x 2y
 ```
 
-**Solution — bound it before consuming**, with `take`, `take_while`, or a two-argument `iota`:
+```
+   zip           A:  a0  a1  a2                 length = min(lengths)
+                 B:  b0  b1                     ──►  (a0,b0) (a1,b1)
+                                                     a2 is dropped
+
+   enumerate         x0     x1     x2
+                 (0,x0) (1,x1) (2,x2)           index is a ptrdiff_t
+
+   adjacent<2>   x0  x1  x2  x3
+                 └──┘
+                     └──┘
+                         └──┘                   n-1 overlapping pairs
+
+   cartesian_product({1,2}, {x,y})
+                 1x  1y  2x  2y                 LAST range varies fastest
+```
+
+`rv::zip` stops at the shortest input, which silently discards trailing elements of longer
+ranges — usually desirable, occasionally a bug. `rv::pairwise` is a synonym for
+`rv::adjacent<2>`, and `rv::pairwise_transform` for `rv::adjacent_transform<2>`.
+
+#### Grouping (C++23)
 
 ```cpp
-for (int x : rv::iota(0) | rv::take(5)) std::cout << x << " ";     // 0 1 2 3 4
-for (int x : rv::iota(0, 5))            std::cout << x << " ";     // 0 1 2 3 4
+std::vector<int> v{1, 2, 3, 4, 5, 6, 7, 8};
+v | rv::chunk(3)                              // {123} {456} {78}
+v | rv::slide(3)                              // {123} {234} {345} {456} {567} {678}
+
+std::vector<int> runs{1, 1, 2, 2, 2, 3};
+runs | rv::chunk_by(std::equal_to<>{})        // {11} {222} {3}
+
+std::vector<int> asc{1, 2, 5, 3, 4, 9};
+asc | rv::chunk_by(std::less_equal<>{})       // {125} {349}   (ascending runs)
 ```
 
-Adaptors that must reach the end — `reverse`, `size`, sorting — can never apply to an unbounded range, so the bound belongs as early in the pipeline as the logic allows.
+```
+   chunk(3)      1 2 3 | 4 5 6 | 7 8          disjoint; last may be short
+   slide(3)      1 2 3
+                   2 3 4
+                     3 4 5 ...                overlapping windows, all full size
 
-### 21. Confusing `take`/`drop` with `counted`
+   chunk_by(p)   a new group starts wherever p(prev, curr) is FALSE
+                 {1,1,2,2,2,3} with equal_to  ──►  {1,1} {2,2,2} {3}
+```
 
-`take` and `drop` **clamp** to the available length, which is often assumed to be an error and is
-not:
+`chunk_by` groups only *adjacent* elements. To group by a key the way a database `GROUP BY`
+does, sort by that key first — see the recipe in section 9.4.
+
+#### Tuple-like element access
 
 ```cpp
-std::vector<int> v{1, 2, 3};
-std::ranges::distance(v | rv::take(99));    // 3   — clamped, not UB
-std::ranges::distance(v | rv::drop(99));    // 0   — clamped, not UB
+std::map<std::string, int> m{{"a", 1}, {"b", 2}};
+m | rv::keys              // a b
+m | rv::values            // 1 2
+
+std::vector<std::pair<int, char>> ps{{1, 'x'}, {2, 'y'}};
+ps | rv::elements<1>      // x y
 ```
 
-`views::counted(it, n)` is the dangerous sibling: it promises that `n` elements exist from `it` onward and performs no checking, so an over-long count is undefined behaviour.
+`rv::keys` and `rv::values` are aliases for `rv::elements<0>` and `rv::elements<1>`.
 
-**Solution — prefer `take`/`drop` on a range**; reserve `counted` for cases where the count is known correct, and derive it from the range rather than assuming it.
-
-### 22. Assuming `zip` pads to the longest range (C++23)
-
-`rv::zip` stops at the **shortest** input. Extra elements are dropped with no diagnostic:
+#### Conversion adaptors
 
 ```cpp
-std::vector<int>  a{1, 2, 3, 4};
-std::vector<char> b{'x', 'y'};
+auto tw = v | rv::take_while([](int x) { return x < 4; });
+// rg::common_range<decltype(tw)>              is false
+// rg::common_range<decltype(tw | rv::common)> is true
 
-for (auto [i, c] : rv::zip(a, b)) std::cout << i << c << " ";   // 1x 2y
-std::ranges::distance(rv::zip(a, b));                            // 2, not 4
+v | rv::as_const     // C++23; reference type becomes int const&
+v | rv::as_rvalue    // C++23; reference type becomes int&& — for moving elements out
 ```
 
-**Solution — check the lengths explicitly** when the ranges are expected to match:
+`rv::common` exists solely to adapt a range for a legacy API requiring `begin()` and `end()`
+of the same type. It costs a runtime branch on some ranges, so it should be applied at the
+boundary rather than habitually.
 
-```cpp
-assert(std::ranges::size(a) == std::ranges::size(b));
-```
-
-Silent truncation is the intended semantic, so a mismatch is a bug in the caller's data, not something `zip` will report.
-
-### 23. Using `auto` with `zip` and `enumerate` element access (C++23)
-
-These views yield tuples of *references*. Binding with plain `auto` copies, so writes are lost:
-
-```cpp
-std::vector<std::string> s{"a", "b"};
-
-for (auto [i, val] : rv::enumerate(s)) val += "!";     // modifies copies; `s` is unchanged
-for (auto&& [i, val] : rv::enumerate(s)) val += "!";   // modifies `s`: a! b!
-```
-
-**Solution — use `auto&&` for structured bindings over any pipeline**, for the same reason as §11.
-
----
-
-## Part VI — Toolchain availability
-
-Feature-test macros are the reliable way to check what a given library provides. Measured on **g++ 13.3 / libstdc++** with `-std=c++23`:
-
-| Facility | Macro | g++ 13.3 |
-|---|---|---|
-| `views::zip` | `__cpp_lib_ranges_zip` | 202110 |
-| `views::enumerate` | `__cpp_lib_ranges_enumerate` | 202302 |
-| `views::chunk` | `__cpp_lib_ranges_chunk` | 202202 |
-| `views::slide` | `__cpp_lib_ranges_slide` | 202202 |
-| `views::stride` | `__cpp_lib_ranges_stride` | 202207 |
-| `views::cartesian_product` | `__cpp_lib_ranges_cartesian_product` | 202207 |
-| `views::as_const` | `__cpp_lib_ranges_as_const` | 202207 |
-| `std::ranges::to` | `__cpp_lib_ranges_to_container` | **absent** (GCC 14+) |
-
-The common trap is assuming `std::ranges::to` accompanies the C++23 views, since most of them landed a release earlier. Guard portable code:
-
-```cpp
-#ifdef __cpp_lib_ranges_to_container
-    auto out = pipeline | std::ranges::to<std::vector>();
-#else
-    std::vector<int> out;
-    std::ranges::copy(pipeline, std::back_inserter(out));
-#endif
-```
-
----
-
-# Quick reference
-
-| # | Mistake | Consequence | Fix |
-|---|---|---|---|
-| 1 | Storing a pipeline as if it were a result | Recomputes; tracks later source edits | Materialise (`ranges::copy` / `ranges::to`) |
-| 2 | Returning a view over a named local | Dangling (`stack-use-after-return`) | Return a container, or `std::move` the source in |
-| 3 | Working around `std::ranges::dangling` | Undefined behaviour | Name the range first |
-| 4 | Reference capture in a stored callable | Dangling read per element | Capture by value; return by value |
-| 5 | Mutating the source under a live view | Silently wrong results, no sanitizer hit | Finish with the view, then rebuild |
-| 6 | `transform` before `filter` | Transform runs ~3× more often | Filter the cheap input first |
-| 7 | Stateful callable in a view | Results depend on traversal count | Keep pipeline callables pure |
-| 8 | Traversing a view repeatedly | Silent recomputation; O(n) first `begin()` | Materialise |
-| 9 | Rebuilding a pipeline in a loop | Cache discarded each iteration (3000 vs 1000) | Hoist the pipeline out |
-| 10 | Writing through `filter_view` off-predicate | UB; stale cached position | Plain loop; rebuild the view |
-| 11 | `auto&` over a `transform_view` | Compile error (prvalue) | Use `auto&&` |
-| 12 | Writing through a const source / `as_const` | Compile error | Choose read vs write path deliberately |
-| 13 | Passing a view as `const&` | Compile error (non-const `begin()`) | Take by value or `auto&&` |
-| 14 | `sort` on `filter_view` / `transform_view` | Compile error | Sort the container, or materialise |
-| 15 | `size()` on a filtered pipeline | Compile error (not a `sized_range`) | `ranges::distance`, or materialise |
-| 16 | View into a pre-C++20 algorithm | Compile error (sentinel ≠ iterator) | `rv::common`, or the `ranges::` algorithm |
-| 17 | Using a view iterator to index the container | Reads the wrong element | `.base()` |
-| 18 | Treating `split` pieces as strings | Compile error | Construct `string`/`string_view` explicitly |
-| 19 | Traversing an input range twice | Second pass empty, no diagnostic | Materialise once |
-| 20 | Unbounded range without a bound | Hangs | `take` / `take_while` / bounded `iota` |
-| 21 | `counted` with an over-long count | Undefined behaviour | Prefer `take`/`drop`, which clamp |
-| 22 | Assuming `zip` pads | Silent truncation to the shortest | Assert equal lengths |
-| 23 | `auto` structured bindings over `zip`/`enumerate` | Writes lost to copies | `auto&&` |
-
----
-
-### The single habit that prevents most of this
-
-At every step of a pipeline, it is best to decide explicitly whether a **lazy reference** or an **owned result** is wanted. Views are excellent at the former and are not the latter, and the library issues no diagnostic when one is mistaken for the other — the failures show up as wrong answers, as sanitizer reports, or as template errors far from the cause.
-
-Three practical rules cover the majority of cases:
-
-1. Materialise at boundaries.
-2. Keep pipeline callables pure and capture by value.
-3. Use `auto&&` in range-`for` and take views by value in interfaces.
+Sources:
+* https://www.youtube.com/watch?v=HYENjkZvsrM
+* https://www.youtube.com/watch?v=Rbl3h0RJuuY
+* https://www.youtube.com/watch?v=Q434UHWRzI0
+* https://www.youtube.com/watch?v=5iXUCcFP6H4
+* Functional Programming in C++ by Ivan Cukic
