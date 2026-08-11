@@ -42,7 +42,6 @@ auto result = transform(
     value
 );
 ```
-A functor doesn't just lift *values* into boxes; it lifts **functions** into the "box world."
 
 ```
    plain world:           f : T ──────────────────────▶ U
