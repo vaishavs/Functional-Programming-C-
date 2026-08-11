@@ -1,5 +1,14 @@
 # The box model Functor
-A *box* functor (**not** a [callable object](https://github.com/vaishavs/Functional-Programming-CPP/blob/main/02_Designing_HO_Funcs/01_intro.md#functors)) is a *type constructor*. It takes a type `T` to a new type `F<T>` — paired with one operation (`transform` in C++, `map`/`fmap` elsewhere). This operation takes a function `A → B` and an `F<A>` and produces `F<B>`, applying the function to whatever sits inside while leaving the box's *structure* untouched. In other words, given any function `f : A → B`, it produces a function `transform(f) : F<A> → F<B>`.
+A *box* functor (**not** a [callable object](https://github.com/vaishavs/Functional-Programming-CPP/blob/main/02_Designing_HO_Funcs/01_intro.md#functors)) is a *type constructor*. 
+
+A functor takes a type `T` to a new type `F<T>` — paired with one operation (`transform` in C++, `map`/`fmap` elsewhere). This operation takes a function `A → B` and an `F<A>` and produces `F<B>`, applying the function to whatever sits inside while leaving the box's *structure* untouched. In other words, given any function `f : A → B`, it produces a function `transform(f) : F<A> → F<B>`.
+
+In simpler terms, consider a template class `F`. This template class is considered a functor if it defines a `map` or `transform` method. This method should take two arguments:
+
+1. A value of type `F<T1>`.
+2. A function t that transforms a value of type `T1` to a value of type `T2`.
+
+The `map`/`transform` method then applies the function to the value inside the structure `F` and returns a new structure `F<T2>` with the transformed value.
 
 The operation every functor must provide looks like this:
 
